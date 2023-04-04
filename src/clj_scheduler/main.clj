@@ -5,6 +5,7 @@
    [clj-common.http-server :as server]
    [hiccup.core :as hiccup]
    compojure.core
+   ring.util.response
    [clj-scheduler.core :as core]
    [clj-scheduler.env :as env]
    [clj-scheduler.job :as job]
@@ -12,7 +13,7 @@
 
 ;; todo support seq html representation
 
-(defn html-map->table [dictionary]
+(defn html-state->table [path dictionary]
   [:table {:style "border-collapse:collapse;"}
    (map
     (fn [[key value]]
@@ -21,8 +22,12 @@
         key]
        [:td {:style "border: 1px solid black; padding: 5px;"}
         (if (map? value)
-          (html-map->table value)
-          value)]])
+          (html-state->table (conj path key) value)
+          [:div
+           value
+           [:a {:href (str "/state/unset/"
+                           (clojure.string/join "/" (conj path key)))}
+            "(unset)"]])]])
     dictionary)])
 
 (server/create-server
@@ -33,6 +38,8 @@
    _
    {
     :status 200
+    :headers {
+              "Content-Type" "text/html; charset=utf-8"}
     :body (hiccup/html
            [:body  {:style "font-family:arial;"}
             [:div "jobs:"]
@@ -48,13 +55,16 @@
                     (:name job)]
                    [:td {:style "border: 1px solid black; padding: 5px;"}
                     (:status state)]]))
-              (deref core/jobs))]
+              (reverse
+               (sort-by
+                :submitted-at
+                (deref core/jobs))))]
             [:br]
             [:br]
             [:div "state:"]
             [:br]
             [:table {:style "border-collapse:collapse;"}
-             (html-map->table (deref core/state))]
+             (html-state->table [] (deref core/state))]
             [:br]
             [:br]
             [:div "triggers:"]
@@ -80,6 +90,8 @@
            counters (:counters state)]
        {
         :status 200
+        :headers {
+                  "Content-Type" "text/html; charset=utf-8"}
         :body (hiccup/html
                [:body {:style "font-family:arial;"}
                 [:div (str "job: " (:id job))]
@@ -87,7 +99,7 @@
                 [:div "counters:"]
                 (map (fn [[counter value]]
                        [:div (str counter " = " value)])
-                     counters)
+                     (sort-by first counters))
                 [:br]
                 [:div "output:"]
                 (map (fn [line]
@@ -106,6 +118,8 @@
                   counters (get-in trigger [:state :counters])]
               {
                :status 200
+               :headers {
+                         "Content-Type" "text/html; charset=utf-8"}
                :body (hiccup/html
                       [:body {:style "font-family:arial;"}
                        [:div (str "trigger: " name)]
@@ -121,7 +135,16 @@
                             out)])})
             {
              :status 404
-             :body "unknown trigger name"})))))
+             :body "unknown trigger name"})))
+
+  (compojure.core/GET
+   "/state/unset/*"
+   _
+   (fn [request]
+     (let [route (get-in request [:params :*])
+           node (.split route "/")]
+       (core/state-unset node)
+       (ring.util.response/redirect "/"))))))
 
 (defn -main [& args]
   (println "scheduler started")

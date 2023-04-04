@@ -1,17 +1,33 @@
-(ns clj-scheduler.job
+(ns clj-scheduler.job.system
   (:require
-   [clj-common.path :as path]
+   [clj-common.as :as as]
+   [clj-common.io :as io]
    [clj-common.localfs :as fs]
+   [clj-common.path :as path]
    [clj-scheduler.core :as core]))
 
-(defn hello-world [context]
-  (core/context-report context "hello world")
-  (core/context-counter context "hello")
-  (Thread/sleep 1000)
-  (core/context-counter context "hello")
-  (core/context-report context "end"))
+(defn job-cleanup [context]
+  (let [keep-last (or (as/as-long
+                       (get (core/context-configuration context) :keep-last))
+                      10)]
+    (core/context-report context (str "keeping last " keep-last " jobs") )
+    (core/jobs-cleanup keep-last)
+    (core/context-report context "jobs cleanup finished")))
 
 ;; todo, maybe better to use create functions like for trigger
+
+(defn ensure-directory [context]
+  (let [configuration (core/context-configuration context)
+        directory (get configuration :directory)]
+    (if (fs/exists? directory)
+      (core/context-report
+       context
+       (str "Directory present: " (path/path->string directory)))
+      (do
+        (fs/mkdirs directory)
+        (core/context-report
+         context
+         (str "Directory created: " (path/path->string directory)))))))
 
 (defn watch-directory [context]
   (let [configuration (core/context-configuration context)
