@@ -62,6 +62,19 @@
    (assoc job :submitted-at (System/currentTimeMillis)))
   (:id job))
 
+(defn job-remove [id]
+  (swap!
+   jobs
+   #(reduce
+     (fn [jobs job]
+       (if (and
+            (= (:id job) id)
+            (not (= (:status (deref (:state job))) :running)))
+         jobs
+         (conj jobs job)))
+     []
+     %)))
+
 (defn job-status [job]
   (:status (deref (:state job))))
 
@@ -166,45 +179,48 @@
   (new
    Thread
    (fn []
+     (.setName (Thread/currentThread) "main-worker")
      (println "[main-worker] starting")
-     ()
-     (while true
-       (if-let [job (first (sort-by
-                            :submitted-at
-                            (filter
-                             #(= (:status (deref (:state %))) :waiting)
-                             (deref jobs))))]
-         (do
-           (println "[main-worker] running job: " (:id job) )
-           (swap! (:state job) assoc :status :running)
-           (let [context {
-                          :id (:id job)
-                          :name (:name job)
-                          :configuration (:configuration job)
-                          :report-fn (fn [line]
-                                       (swap!
-                                        (:state job)
-                                        update-in
-                                        [:out]
-                                        conj
-                                        line)
-                                       (println line))
-                          :inc-counter-fn (fn [counter]
-                                            (swap!
-                                             (:state job)
-                                             update-in
-                                             [:counters counter]
-                                             #(inc (or % 0))))}]
-             (try
-               ((:fn job) context)
-               (swap! (:state job) assoc :status :finished)
-               (catch Exception e
-                 ;; todo capture exception to log
-                 (.printStackTrace e)
-                 (swap! (:state job) assoc :status :failed)))))
-         (do
-           (state-set ["system" "worker" "main" "last"] (System/currentTimeMillis))
-           (java.lang.Thread/sleep 5000)))))))
+     (try
+       (while true
+        (if-let [job (first (sort-by
+                             :submitted-at
+                             (filter
+                              #(= (:status (deref (:state %))) :waiting)
+                              (deref jobs))))]
+          (do
+            (println "[main-worker] running job: " (:id job) )
+            (swap! (:state job) assoc :status :running)
+            (let [context {
+                           :id (:id job)
+                           :name (:name job)
+                           :configuration (:configuration job)
+                           :report-fn (fn [line]
+                                        (swap!
+                                         (:state job)
+                                         update-in
+                                         [:out]
+                                         conj
+                                         line)
+                                        (println line))
+                           :inc-counter-fn (fn [counter]
+                                             (swap!
+                                              (:state job)
+                                              update-in
+                                              [:counters counter]
+                                              #(inc (or % 0))))}]
+              (try
+                ((:fn job) context)
+                (swap! (:state job) assoc :status :finished)
+                (catch Exception e
+                  ;; todo capture exception to log
+                  (.printStackTrace e)
+                  (swap! (:state job) assoc :status :failed)))))
+          (do
+            (state-set ["system" "worker" "main" "last"] (System/currentTimeMillis))
+            (java.lang.Thread/sleep 5000))))
+       (catch Exception e
+         (println "[main-worker] exiting"))))))
 (.start worker-thread-main)
 #_(.interrupt worker-thread-main)
 
@@ -224,30 +240,35 @@
   (new
    Thread
    (fn []
+     (.setName (Thread/currentThread) "trigger-thread")
      (println "[trigger] starting")
      (while true
        (doseq [[name trigger] (deref triggers)]
-         (let [context {
-                        :name name
-                        :configuration (:configuration trigger)
-                        :report-fn (fn [line]
-                                     (swap!
-                                      triggers
-                                      update-in [name :state :out]
-                                      #(take-last 100 (conj % line))))
-                        :inc-counter-fn (fn [counter]
-                                          (swap!
-                                           triggers
-                                           update-in
-                                           [name :state :counters counter]
-                                           #(inc (or % 0))))}]
-           (try
-             ((:trigger-fn trigger) context)
-             (catch Exception e
-               (.printStackTrace e)
-               (println (str "[trigger] failed " name))))))
+         ;; must be string because it's altered over ui
+         (when (not (= "true" (state-get ["system" "trigger" "pause"])))
+          (let [context {
+                         :name name
+                         :configuration (:configuration trigger)
+                         :report-fn (fn [line]
+                                      (swap!
+                                       triggers
+                                       update-in [name :state :out]
+                                       #(take-last 100 (conj % line))))
+                         :inc-counter-fn (fn [counter]
+                                           (swap!
+                                            triggers
+                                            update-in
+                                            [name :state :counters counter]
+                                            #(inc (or % 0))))}]
+            (try
+              ((:trigger-fn trigger) context)
+              (catch Exception e
+                (.printStackTrace e)
+                (println (str "[trigger] failed " name)))))))
        (state-set ["system" "trigger" "last"] (System/currentTimeMillis))
        (java.lang.Thread/sleep 5000)))))
 
 (.start trigger-thread)
 #_(.interrupt trigger-thread)
+
+#_(state-set ["system" "trigger" "pause"] "true")

@@ -1,5 +1,8 @@
 (ns clj-scheduler.job.osm
+  (:use
+   clj-common.clojure)
   (:require
+   [clj-common.2d :as draw]
    [clj-common.context :as context]
    [clj-common.http :as http]
    [clj-common.io :as io]
@@ -111,3 +114,86 @@
 
     (core/state-set state-done-node timestamp)
     (core/context-report job-context (str "state set at " state-done-node))))
+
+(defn download-tile-bounds
+  "Downloads all tiles in given bounds from provided tile server"
+  [context]
+  (let [state-done-node (get (core/context-configuration context) :state-done-node)
+        store-path (get (core/context-configuration context) :store-path)
+        tile-server-url (get (core/context-configuration context) :tile-server-url)
+        timestamp (System/currentTimeMillis)
+        [zoom min-x min-y] (get (core/context-configuration context) :upper-left-tile)
+        [zoom max-x max-y] (get (core/context-configuration context) :lower-right-tile)]
+    (doseq [x (range min-x (inc max-x))]
+      (doseq [y (range min-y (inc max-y))]
+        (let [url (->
+                   tile-server-url
+                   (.replace "{z}" (str zoom))
+                   (.replace "{x}" (str x))
+                   (.replace "{y}" (str y)))
+              path (path/child store-path (str zoom "_" x "_" y ".png"))]
+          (core/context-report context (str "downloading: " url))
+          (let [is (http/get-as-stream
+                    url
+                    {
+                     :headers {"User-Agent" "trek-mate"}})]
+            (with-open [os (fs/output-stream path)]
+              (io/copy-input-to-output-stream is os)))
+          (sleep 500))))
+    (core/state-set state-done-node timestamp)
+    (core/context-report context (str "state set at " state-done-node))))
+
+(defn image-from-tiles
+  "Use tiles downloaded with download-tile-bounds to create image"
+  [context]
+  (let [state-done-node (get (core/context-configuration context) :state-done-node)
+        tile-path (get (core/context-configuration context) :tile-path)
+        store-path (get (core/context-configuration context) :store-path)
+        timestamp (System/currentTimeMillis)
+        [zoom min-x min-y] (get (core/context-configuration context) :upper-left-tile)
+        [zoom max-x max-y] (get (core/context-configuration context) :lower-right-tile)
+        image-width (* (- max-x min-x) 256)
+        image-height (* (- max-y min-y) 256)]
+    (let [image (draw/create-image-context image-width image-height)]
+      (doseq [x (range min-x (inc max-x))]
+        (doseq [y (range min-y (inc max-y))]
+          (let [path (path/child tile-path (str zoom "_" x "_" y ".png"))]
+            (core/context-report context (str "processing [" zoom " " x " " y "]"))
+            (with-open [is (fs/input-stream path)]
+              (let [tile (draw/input-stream->image-context is)]
+                (draw/draw-image
+                 image
+                 [(+ (* (- x min-x) 256) 128) (+ (* (- y min-y) 256) 128)]
+                 tile))))))
+      (with-open [os (fs/output-stream store-path)]
+        (draw/write-png-to-stream image os)))
+    
+    (core/state-set state-done-node timestamp)
+    (core/context-report context (str "state set at " state-done-node))))
+
+#_(core/job-sumbit
+ (core/job-create
+  "download-osm-tile-pss"
+  {
+   
+   :store-path ["Users" "vanja" "dataset-local" "tile-osm-pss"]
+   :tile-server-url "https://tile.openstreetmap.org/{z}/{x}/{y}.png"
+   :state-done-node ["osm-pss" "tile-download"]
+   :upper-left-tile [10 565 363]
+   :lower-right-tile [10 578 381]}
+  ;; todo
+  download-tile-bounds))
+
+#_(core/job-sumbit
+ (core/job-create
+  "background-osm-tile-pss"
+  {
+   :store-path ["Users" "vanja" "dataset-local" "tile-osm-pss" "image.png"]
+   :tile-path ["Users" "vanja" "dataset-local" "tile-osm-pss"]
+   :state-done-node ["osm-pss" "background-create"]
+   :upper-left-tile [10 565 363]
+   :lower-right-tile [10 578 381]}
+  ;; todo
+  image-from-tiles))
+
+

@@ -2,11 +2,14 @@
   (:use
    clj-common.clojure)
   (:require
+   [clojure.core.async :as async]
    [hiccup.core :as hiccup]
-   
+
+   [clj-common.2d :as draw]
    [clj-common.as :as as]
    [clj-common.context :as context]
    [clj-common.http :as http]
+   [clj-common.edn :as edn]
    [clj-common.io :as io]
    [clj-common.json :as json]
    [clj-common.localfs :as fs]
@@ -14,9 +17,11 @@
    [clj-common.pipeline :as pipeline]
    [clj-common.view :as view]
 
+   [clj-geo.import.geojson :as geojson]
    [clj-geo.import.gpx :as gpx]
    [clj-geo.import.osm :as osm]
    [clj-geo.import.osmapi :as osmapi]
+   [clj-geo.math.tile :as tile-math]
    
    [clj-scheduler.core :as core]
    [clj-scheduler.env :as env]))
@@ -34,9 +39,6 @@
 
 ;; legacy from old trek-mate times
 (def active-pipeline nil)
-
-(def dataset-path (path/child env/dataset-git-path "pss.rs"))
-(def integration-git-path ["Users" "vanja" "projects" "osm-pss-integration" "dataset"])
 
 ;; additional notes, not related to osm integration
 ;; to be discussed with pss working group
@@ -189,7 +191,7 @@
 
 ;; todo
 ;; extract jobs from download routines
-
+(def dataset-path (path/child env/dataset-git-path "pss.rs"))
 ;; process https://pss.rs/planinarski-objekti-i-tereni/tereni/?tip=planinarski-putevi
 ;; download routes list and supporting files
 #_(with-open [is (http/get-as-stream "https://pss.rs/planinarski-objekti-i-tereni/tereni/?tip=planinarski-putevi")]
@@ -564,7 +566,10 @@
 
 (defn prepare-pss-dataset
   [job-context]
-  (let [posts (concat
+  (let [configuration (core/context-configuration job-context)
+        dataset-path (:pss-dataset-path configuration)
+        osm-pss-integration-path (:osm-pss-integration-path configuration)
+        posts (concat
                (with-open [is (fs/input-stream (path/child dataset-path "posts.json"))]
                  (json/read-keyworded is))
                (with-open [is (fs/input-stream (path/child dataset-path "posts-transversal.json"))]
@@ -626,7 +631,7 @@
                   (fn [routes info-path]
                     (core/context-report
                      job-context
-                     (str) "processing" (path/path->string info-path))
+                     (str "processing" (path/path->string info-path)))
                     (let [gpx-path (let [gpx-path (path/child
                                                    (path/parent info-path)
                                                    (.replace (last info-path) ".json" ".gpx"))]
@@ -663,7 +668,8 @@
       (core/context-report job-context (str "Number of routes: " (count routes)))
 
       ;; todo store on disk to decouple jobs
-      routes)))
+      (with-open [os (fs/output-stream (path/child osm-pss-integration-path "pss-dataset.edn"))]
+        (edn/write-object os routes)))))
 
 ;; load single route info
 #_(def a
@@ -718,8 +724,7 @@
     (core/wait-pipeline-job context)
 
     (with-open [os (fs/output-stream (path/child osm-pss-integration-path
-                                                 "dataset"
-                                                 "relation-mappings.tsv"))]
+                                                 "relation-mapping.tsv"))]
       (io/write-line os (str "pss ref\tosm relation id"))
       (doseq [relation (sort-by
                         #(get-in % [:tags "ref"])
@@ -738,7 +743,7 @@
     extract-pss-ref-osm-relation-id-mapping))
 
 (defn extract-pss-osm
-  "Uses relation-mappings.tsv to extract relations, ways and nodes needed"
+  "Uses relation-mapping.tsv to extract relations, ways and nodes needed"
   [job-context]
   (let [configuration (core/context-configuration job-context)
         context (core/context-pipeline-adapter job-context)
@@ -755,8 +760,7 @@
     (let [relation-set (with-open [is (fs/input-stream
                                        (path/child
                                         osm-pss-integration-path
-                                        "dataset"
-                                        "relation-mappings.tsv"))]
+                                        "relation-mapping.tsv"))]
                          (into #{}
                                (map
                                 (comp
@@ -932,7 +936,12 @@
   (pipeline/wait-pipeline-output (channel-provider :capture))))
 
 (defn extract-pss-stats [job-context]
-  (let [configuration (core/context-configuration job-context)]
+  (let [configuration (core/context-configuration job-context)
+        integration-git-path (:osm-pss-integration-path configuration)
+        state-done-node (get
+                         (core/context-configuration job-context)
+                         :state-done-node)
+        timestamp (System/currentTimeMillis)]
     (core/context-report job-context "loading osm-pss-extract")
     ;; overpass for relations
     ;; (overpass/query-string "relation[type=route][route=hiking](area:3601741311);")
@@ -959,7 +968,8 @@
       ;; 155 20220307
       ;; 141
 
-      (let [routes (prepare-pss-dataset job-context)]        
+      (let [routes (with-open [is (fs/input-stream (path/child integration-git-path "pss-dataset.edn"))]
+                     (edn/read-object is))]        
         ;; 20220817
         ;; table for data verification for PSS working group
         (core/context-report job-context "Creating osm-pss-integration git files")
@@ -1060,16 +1070,16 @@
                     relation (get relation-map id)]
                 (do
                   (println "|-")
-                  (println "|" (get-in relation [:osm "ref"]))
+                  (println "|" (get-in relation [:tags "ref"]))
                   (println "|" (id->region id))
-                  (println "|" (:planina route))
+                  (println "|" (or (:planina route)) "")
                   (println "|" (or (:uredjenost route) ""))
-                  (println "|" (get-in relation [:osm "name:sr"]))
-                  (println "|" (str "[" (get-in relation [:osm "website"]) " pss]"))
+                  (println "|" (get-in relation [:tags "name:sr"]))
+                  (println "|" (str "[" (get-in relation [:tags "website"]) " pss]"))
                   (println "|" (if-let [relation-id (:id relation)]
                                  (str "{{relation|" relation-id "}}")
                                  ""))
-                  (println "|" (if-let [note (get (:osm relation) "note")]
+                  (println "|" (if-let [note (get (:tags relation) "note")]
                                  note
                                  (if-let [note (get note-map id)]
                                    note
@@ -1187,7 +1197,10 @@
                      #(id-compare %1 %2)
                      rest-of-routes))]]]))))))
 
-      (core/context-report job-context "Job finished"))))
+      (core/context-report job-context "Job finished")
+
+      (core/state-set state-done-node timestamp)
+      (core/context-report job-context (str "state set at " state-done-node)))))
 
 #_(core/job-sumbit
    (core/job-create
@@ -1195,6 +1208,397 @@
     {
      :osm-pss-extract-path ["Users" "vanja" "dataset-local" "osm-pss-extract"]}
     extract-pss-stats))
+
+
+(defn extract-geojson-combined-map
+  "Creates GeoJSON which contains all ways that belong to PSS hiking trail. Each
+  way contains information to which trails belongs."
+  [job-context]
+  (let [configuration (core/context-configuration job-context)
+        context (core/context-pipeline-adapter job-context)
+        channel-provider (pipeline/create-channels-provider)
+        resource-controller (pipeline/create-trace-resource-controller context)
+        osm-pss-integration-path (:osm-pss-integration-path configuration)
+        osm-pss-extract-path (:osm-pss-extract-path configuration)
+        state-done-node (get
+                         (core/context-configuration job-context)
+                         :state-done-node)
+        timestamp (System/currentTimeMillis)]
+    (pipeline/read-edn-go
+     (context/wrap-scope context "read-node")
+     resource-controller
+     (path/child osm-pss-extract-path "node.edn")
+     (channel-provider :node-in))
+
+    (pipeline/read-edn-go
+     (context/wrap-scope context "read-way")
+     resource-controller
+     (path/child osm-pss-extract-path "way.edn")
+     (channel-provider :way-in))
+
+    (pipeline/read-edn-go
+     (context/wrap-scope context "read-relation")
+     resource-controller
+     (path/child osm-pss-extract-path "relation.edn")
+     (channel-provider :relation-in))
+
+    #_(pipeline/create-lookup-go
+       (context/wrap-scope context "relation-lookup")
+       (channel-provider :relation-in)
+       :id
+       identity
+       (channel-provider :relation-lookup-in))
+
+    (pipeline/reducing-go
+     (context/wrap-scope context "way-lookup")
+     (channel-provider :relation-in)
+     (fn
+       ([] {})
+       ([state relation]
+        (let [network (get-in relation [:tags "network"])
+              trail (get-in relation [:tags "ref"])]
+          (reduce
+           (fn [state member]
+             (assoc
+              state
+              (:id member)
+              (if-let [way (get state (:id member))]
+                {
+                 :networks
+                 (conj (or (get way :networks) #{}) network)
+                 :trails
+                 (conj (or (get way :trails) #{}) trail)}
+                {
+                 :networks #{network}
+                 :trails #{trail}})))
+           state
+           (filter #(= (:type %) :way) (:members relation)))))
+       ([state] state))
+     (channel-provider :way-lookup-drain))
+
+    (pipeline/drain-go
+     (context/wrap-scope context "way-lookup-drain")
+     (channel-provider :way-lookup-drain)
+     (channel-provider :way-lookup))
+    
+    (osm/resolve-way-geometry-in-memory-go
+     (context/wrap-scope context "resolve-geometry")
+     (channel-provider :node-in)
+     (channel-provider :way-in)
+     (channel-provider :way-out))
+
+    (async/go
+      (let [context (context/wrap-scope context "transform")
+            way-lookup-in (channel-provider :way-lookup)
+            resolved-way-in (channel-provider :way-out)
+            feature-out (channel-provider :feature-in)]
+        (let [way-lookup (or (async/<! way-lookup-in) {})]
+          (loop [way (async/<! resolved-way-in)]
+            (context/set-state context "step")
+            (when way
+              (context/increment-counter context "way-in")
+              (if-let [metadata (get way-lookup (:id way))]
+                (let [networks (get metadata :networks)
+                      width (cond
+                              (contains? networks "iwn") 6
+                              (contains? networks "nwn") 4
+                              (contains? networks "rwn") 2
+                              :else 1)]
+                  (context/increment-counter context (str "width-" width))
+                  (context/increment-counter context "way-out")
+                  (context/increment-counter context "lookup-match")
+                  (async/>!
+                   feature-out
+                   (binding [geojson/*style-stroke-width* width
+                             geojson/*style-stroke-color* "#FF0000"]
+                     (geojson/line-string metadata (:coords way)))))
+                (do
+                  (context/increment-counter context "way-out")
+                  (context/increment-counter context "lookup-mismatch")
+                  (async/>!
+                   feature-out
+                   (binding [geojson/*style-stroke-width* 1
+                             geojson/*style-stroke-color* "#FF0000"]
+                     (geojson/line-string {} (:coords way))))))
+              (recur (async/<! resolved-way-in))))
+          (async/close! feature-out)
+          (context/set-state context "completion"))))
+    
+    #_(pipeline/transducer-stream-go
+       (context/wrap-scope context "transform")
+       (channel-provider :way-out)
+       (map (fn [way]
+              (geojson/line-string (:coords way))))
+       (channel-provider :feature-in))
+
+    (geojson/write-geojson-go
+     (context/wrap-scope context "write-geojson")
+     (path/child osm-pss-integration-path "combined-map.geojson")
+     (channel-provider :feature-in))
+
+    (alter-var-root #'active-pipeline (constantly (channel-provider)))
+    
+    (core/wait-pipeline-job context)
+    
+    (core/state-set state-done-node timestamp)
+    (core/context-report job-context (str "state set at " state-done-node))))
+
+#_(core/job-sumbit
+ (core/job-create
+  "extract-geojson-combined-map"
+  {
+   :osm-pss-extract-path ["Users" "vanja" "dataset-local" "osm-pss-extract"]
+   :osm-pss-integration-path ["Users" "vanja" "projects" "osm-pss-integration"]
+   :state-done-node ["pss" "geojson-combined-map"]}
+  ;; todo
+  extract-geojson-combined-map))
+
+(defn load-pss-extract-as-dataset
+  "Loads pss-extract into memory as dataset suitable for analysis and extracts."
+  [job-context]
+  (let [configuration (core/context-configuration job-context)
+        context (core/context-pipeline-adapter job-context)
+        channel-provider (pipeline/create-channels-provider)
+        resource-controller (pipeline/create-trace-resource-controller context)
+        osm-pss-integration-path (:osm-pss-integration-path configuration)
+        osm-pss-extract-path (:osm-pss-extract-path configuration)
+        state-done-node (get
+                         (core/context-configuration job-context)
+                         :state-done-node)
+        timestamp (System/currentTimeMillis)
+        pss-dataset (atom {})]
+    (pipeline/read-edn-go
+     (context/wrap-scope context "read-node")
+     resource-controller
+     (path/child osm-pss-extract-path "node.edn")
+     (channel-provider :node))
+
+    (pipeline/read-edn-go
+     (context/wrap-scope context "read-way")
+     resource-controller
+     (path/child osm-pss-extract-path "way.edn")
+     (channel-provider :way))
+
+    (pipeline/read-edn-go
+     (context/wrap-scope context "read-relation")
+     resource-controller
+     (path/child osm-pss-extract-path "relation.edn")
+     (channel-provider :relation))
+
+    (pipeline/reducing-go
+     (context/wrap-scope context "node-dataset")
+     (channel-provider :node)
+     (fn
+       ([] {})
+       ([state node]
+        (osmapi/dataset-append-node state node))
+       ([state] state))
+     (channel-provider :node-dataset))
+    
+    (pipeline/pass-last-go
+     (context/wrap-scope context "wait-last-node")
+     (channel-provider :node-dataset)
+     (channel-provider :node-dataset-final))
+    
+    (pipeline/reducing-go
+     (context/wrap-scope context "way-dataset")
+     (channel-provider :way)
+     (fn
+       ([] {})
+       ([state way]
+        (osmapi/dataset-append-way state way))
+       ([state] state))
+     (channel-provider :way-dataset))
+
+    (pipeline/pass-last-go
+     (context/wrap-scope context "wait-last-way")
+     (channel-provider :way-dataset)
+     (channel-provider :way-dataset-final))
+    
+    (pipeline/reducing-go
+     (context/wrap-scope context "relation-dataset")
+     (channel-provider :relation)
+     (fn
+       ([] {})
+       ([state relation]
+        (osmapi/dataset-append-relation state relation))
+       ([state] state))
+     (channel-provider :relation-dataset))
+
+    (pipeline/pass-last-go
+     (context/wrap-scope context "wait-last-relation")
+     (channel-provider :relation-dataset)
+     (channel-provider :relation-dataset-final))
+
+    (pipeline/funnel-go
+     (context/wrap-scope context "funnel-dataset")
+     [
+      (channel-provider :node-dataset-final)
+      (channel-provider :way-dataset-final)
+      (channel-provider :relation-dataset-final)]
+     (channel-provider :dataset))
+
+    (pipeline/reducing-go
+     (context/wrap-scope context "dataset")
+     (channel-provider :dataset)
+     (fn
+       ([] {})
+       ([state dataset]
+        (osmapi/merge-datasets state dataset))
+       ([state] state))
+     (channel-provider :wait-last))
+
+    (pipeline/pass-last-go
+     (context/wrap-scope context "wait-last")
+     (channel-provider :wait-last)
+     (channel-provider :capture))
+
+    (pipeline/capture-atom-go
+     (context/wrap-scope context "capture")
+     (channel-provider :capture)
+     pss-dataset)
+
+    (alter-var-root #'active-pipeline (constantly (channel-provider)))
+
+    (core/wait-pipeline-job context)
+    
+    (core/context-report
+     job-context
+     (str "dataset contains " (count (:nodes (deref pss-dataset))) " nodes"))
+    (core/context-report
+     job-context
+     (str "dataset contains " (count (:ways (deref pss-dataset))) " ways"))
+    (core/context-report
+     job-context
+     (str "dataset contains " (count (:relations (deref pss-dataset))) " relations"))
+
+    (deref pss-dataset)))
+
+(defn extract-geojson-per-trail
+  "Creates GeoJSON for each trail, containing all trail geometry. If trail is
+  not complete multiple features will be extracted"
+  [job-context]
+  (let [configuration (core/context-configuration job-context)
+        context (core/context-pipeline-adapter job-context)
+        channel-provider (pipeline/create-channels-provider)
+        resource-controller (pipeline/create-trace-resource-controller context)
+        osm-pss-integration-path (:osm-pss-integration-path configuration)
+        osm-pss-extract-path (:osm-pss-extract-path configuration)
+        state-done-node (get
+                         (core/context-configuration job-context)
+                         :state-done-node)
+        timestamp (System/currentTimeMillis)]
+    (let [dataset (load-pss-extract-as-dataset job-context)]
+      (core/context-report
+       job-context
+       "dataset loaded, writing trails")
+      (doseq [relation (vals (:relations dataset))]
+        (let [ref (get-in relation [:tags "ref"])]
+          (core/context-report
+           job-context
+           (str "processing: " ref " (" (get relation :id) ")"))
+          (with-open [os (fs/output-stream (path/child
+                                            osm-pss-integration-path "trails" (str ref ".geojson")))]
+            (json/write-pretty-print
+             {
+              :type "FeatureCollection"
+              :properties {}
+              :features
+              (concat
+               ;; ways as lines
+               (filter
+                some?
+                (map
+                 (fn [member]
+                   (cond
+                     (= (:type member) :way)
+                     (let [nodes (map
+                                  (fn [id]
+                                    (let [node (get-in dataset [:nodes id])]
+                                      [(as/as-double (:longitude node)) (as/as-double (:latitude node))]))
+                                  (:nodes (get-in dataset [:ways (:id member)])))]
+                       {
+                        :type "Feature"
+                        :properties {}
+                        :geometry {
+                                   :type "LineString"
+                                   :coordinates nodes}})
+                     :else
+                     nil))
+                 (:members relation))))}
+             (io/output-stream->writer os))))))
+    
+    (core/state-set state-done-node timestamp)
+    (core/context-report job-context (str "state set at " state-done-node))))
+
+(defn create-trails-image
+  "Draws trails on top of image generated from tiles"
+  [job-context]
+  (let [configuration (core/context-configuration job-context)
+        context (core/context-pipeline-adapter job-context)
+        channel-provider (pipeline/create-channels-provider)
+        resource-controller (pipeline/create-trace-resource-controller context)
+        osm-pss-extract-path (:osm-pss-extract-path configuration)
+        background-image-path (:background-image-path configuration)
+        image-path (:image-path configuration)
+        [zoom min-tile-x min-tile-y] (:upper-left-tile configuration)
+        [zoom max-tile-x max-tile-y] (:lower-right-tile configuration)
+        min-x (* min-tile-x 256)
+        max-x (+ (* max-tile-x 256) 256)
+        min-y (* min-tile-y 256)
+        max-y (+ (* max-tile-y 256) 256)
+        state-done-node (get
+                         (core/context-configuration job-context)
+                         :state-done-node)
+        timestamp (System/currentTimeMillis)]
+
+    (core/context-report job-context "write trails on top of background")
+    (let [image (with-open [is (fs/input-stream background-image-path)]
+                  (draw/input-stream->image-context is))
+          dataset (load-pss-extract-as-dataset job-context)]
+      (doseq [relation (vals (:relations dataset))]
+        (let [ref (get-in relation [:tags "ref"])
+              network (get-in relation [:tags "network"])]
+          (core/context-report
+           job-context
+           (str "processing: " ref " - " network " (" (get relation :id) ")"))
+          (doseq [way (filter #(= (:type %) :way) (:members relation))]
+            (let [nodes (map
+                         (fn [id]
+                           (let [node (get-in dataset [:nodes id])]
+                             {
+                              :longitude (as/as-double (:longitude node))
+                              :latitude (as/as-double (:latitude node))}))
+                         (:nodes (get-in dataset [:ways (:id way)])))
+                  points (map (comp
+                               (fn [[x y]]
+                                 {:x (- x min-x) :y (- y min-y)})
+                               (tile-math/zoom-->location->point zoom))
+                              nodes)]
+              (cond
+                (= "iwn" network)
+                (draw/draw-polyline image points draw/color-red 8)
+
+                (= "nwn" network)
+                (draw/draw-polyline image points draw/color-red 4)
+
+                (= "rwn" network)
+                (draw/draw-polyline image points draw/color-red 2)
+
+                (= "lwn" network)
+                (draw/draw-polyline image points draw/color-red 2)
+
+                :else
+                (draw/draw-polyline image points draw/color-red 2))))))
+
+      (core/context-report job-context "write generated image")
+      (with-open [os (fs/output-stream image-path)]
+        (draw/write-png-to-stream image os)))
+    
+    (core/state-set state-done-node timestamp)
+    (core/context-report job-context (str "state set at " state-done-node))))
+
+
 
 ;; old code, useful for history
 #_(do

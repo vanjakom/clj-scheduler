@@ -8,7 +8,6 @@
    ring.util.response
    [clj-scheduler.core :as core]
    [clj-scheduler.env :as env]
-   [clj-scheduler.job :as job]
    [clj-scheduler.trigger :as trigger]))
 
 ;; todo support seq html representation
@@ -30,6 +29,29 @@
             "(unset)"]])]])
     dictionary)])
 
+(defn html-configuration->table [dictionary]
+  [:table {:style "border-collapse:collapse;"}
+   (map
+    (fn [[key value]]
+      [:tr
+       [:td {:style "border: 1px solid black; padding: 5px;"}
+        key]
+       [:td {:style "border: 1px solid black; padding: 5px;"}
+        (cond
+          (map? value)
+          (html-configuration->table value)
+
+          (vector? value)
+          [:div (clojure.string/join "," value)]
+          
+          (seq? value)
+          [:div (clojure.string/join "," value)]
+          
+          :else
+          [:div value])]])
+    dictionary)])
+
+
 (server/create-server
  env/http-server-port
  (compojure.core/routes
@@ -42,19 +64,36 @@
               "Content-Type" "text/html; charset=utf-8"}
     :body (hiccup/html
            [:body  {:style "font-family:arial;"}
+            (let [timestamp (System/currentTimeMillis)
+                  scheduler-timestamp (core/state-get ["system" "trigger" "last"])
+                  worker-timestamp (core/state-get ["system" "worker" "main" "last"])]
+              (if (< (- timestamp scheduler-timestamp) (* 60 1000))
+                (if (= "true" (core/state-get ["system" "trigger" "pause"]))
+                  [:div
+                   "scheduler is paused"
+                   [:a {:href "/state/set/system/trigger/pause/false"} "(continue trigger)"]]
+                  [:div
+                   "scheduler is active"
+                   [:a {:href "/state/set/system/trigger/pause/true"} "(pause trigger)"]])
+                [:div "scheduler is not active"]))
+            [:br]
             [:div "jobs:"]
             [:br]
             [:table {:style "border-collapse:collapse;"}
              (map
               (fn [job]
-                (let [state (deref (:state job))]
+                (let [state (deref (:state job))
+                      status (:status state)]
                   [:tr
                    [:td {:style "border: 1px solid black; padding: 5px;"}
                     [:a {:href (str "/job/" (:id job)) :target "_blank"} (:id job)]]
+                   [:td {:style "border: 1px solid black; padding: 5px;"} (:name job)]
+                   [:td {:style "border: 1px solid black; padding: 5px;"} status]
                    [:td {:style "border: 1px solid black; padding: 5px;"}
-                    (:name job)]
-                   [:td {:style "border: 1px solid black; padding: 5px;"}
-                    (:status state)]]))
+                    (when (not (= status :running))
+                      [:a {:href (str "/job/" (:id job) "/remove") :target "_blank"}
+                       "remove"])]
+                   ]))
               (reverse
                (sort-by
                 :submitted-at
@@ -76,10 +115,20 @@
                  [:td {:style "border: 1px solid black; padding: 5px;"}
                   [:a {:href (str "/trigger/" (url-encode name))
                        :target "_blank"}
-                   name]]])
-              (deref core/triggers))]])})
+                   name]]
+                 [:td {:style "border: 1px solid black; padding: 5px;"}
+                  [:a {:href (str "/trigger/" (url-encode name) "/manual")
+                       :target "_blank"}
+                   "manual trigger"]]])
+              (sort-by first (deref core/triggers)))]])})
 
   ;; todo expose state manupulation ( get, set ) over http
+
+  (compojure.core/GET
+   "/job/:id/remove"
+   [id]
+   (core/job-remove id)
+   (ring.util.response/redirect "/"))
   
   (compojure.core/GET
    "/job/:id"
@@ -96,6 +145,9 @@
                [:body {:style "font-family:arial;"}
                 [:div (str "job: " (:id job))]
                 [:br]
+                [:div "configuration:"]
+                (html-configuration->table (:configuration job))
+                [:br]
                 [:div "counters:"]
                 (map (fn [[counter value]]
                        [:div (str counter " = " value)])
@@ -108,6 +160,12 @@
      {
       :status 404
       :body "unknown job id"}))
+
+  (compojure.core/GET
+   "/trigger/:name/manual"
+   [name]
+   (core/state-set ["trigger" name "should-trigger"] true)
+   (ring.util.response/redirect "/"))
 
   (compojure.core/GET
    "/trigger/:name"
@@ -136,6 +194,17 @@
             {
              :status 404
              :body "unknown trigger name"})))
+
+  (compojure.core/GET
+   "/state/set/*"
+   _
+   (fn [request]
+     (let [route (get-in request [:params :*])
+           node-and-value (.split route "/")
+           node (drop-last node-and-value)
+           value (last node-and-value)]
+       (core/state-set node value)
+       (ring.util.response/redirect "/"))))
 
   (compojure.core/GET
    "/state/unset/*"
