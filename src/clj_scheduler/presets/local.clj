@@ -26,9 +26,16 @@
 
 ;; serbia
 
-(trigger/interval
+;; switch to manual trigger
+#_(trigger/interval
  (* 24 60 60 1000)
  "geofabrik-serbia-download"
+ "geofabrik-serbia-download"
+ {
+  :state-done-node ["geofabrik" "serbia" "download"]
+  :store-path geofabrik-serbia-path}
+ osm/download-latest-geofabrik-serbia)
+(trigger/manual-trigger
  "geofabrik-serbia-download"
  {
   :state-done-node ["geofabrik" "serbia" "download"]
@@ -115,8 +122,16 @@
 
 ;; relation mapping could be disabled after all routes are mapped and manually updated
 ;; switch pss-extract to depend on geofabrik-serbia-split
-(trigger/on-state-change
+#_(trigger/on-state-change
  ["geofabrik" "serbia" "split"]
+ "pss-relation-mapping"
+ {
+  :osm-pss-integration-path ["Users" "vanja" "projects" "osm-pss-integration" "dataset"]
+  :geofabrik-serbia-split-path ["Users" "vanja" "dataset-local" "geofabrik-serbia-split"]
+  :state-done-node ["pss" "relation-mapping"]}
+ pss/extract-pss-ref-osm-relation-id-mapping)
+;; 20231212 switch to manual trigger since Fruskogorska transverzala is not labeled
+(trigger/manual-trigger
  "pss-relation-mapping"
  {
   :osm-pss-integration-path ["Users" "vanja" "projects" "osm-pss-integration" "dataset"]
@@ -126,7 +141,8 @@
 
 ;; pss extract is not depending on relation mapping trigger since it will be disabled
 (trigger/on-state-change
- ["pss" "relation-mapping"]
+ #_["pss" "relation-mapping"]
+ ["geofabrik" "serbia" "split"]
  "pss-extract"
  {
   :osm-pss-integration-path ["Users" "vanja" "projects" "osm-pss-integration" "dataset"]
@@ -164,6 +180,16 @@
 
 (trigger/on-state-change
  ["pss" "extract"]
+ "pss-geojson-with-trails"
+ {
+  :osm-pss-extract-path ["Users" "vanja" "dataset-local" "osm-pss-extract"]
+  :osm-pss-integration-path ["Users" "vanja" "projects" "osm-pss-integration" "dataset"]
+  :state-done-node ["pss" "pss-geojson-with-trails"]}
+ pss/extract-geojson-with-trails)
+
+
+(trigger/on-state-change
+ ["pss" "extract"]
  "pss-trails-image-osm-red"
  {
   :osm-pss-extract-path ["Users" "vanja" "dataset-local" "osm-pss-extract"]
@@ -173,4 +199,13 @@
   :upper-left-tile [10 565 363]
   :lower-right-tile [10 578 381]}
  pss/create-trails-image)
+
+
+;; git checks
+(trigger/manual-trigger
+ "git-check-projects"
+ {
+  :repo-root ["Users" "vanja" "projects"]
+  :state-root ["git" "projects"]}
+ system/git-status-repo-root)
 

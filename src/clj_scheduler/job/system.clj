@@ -1,6 +1,7 @@
 (ns clj-scheduler.job.system
   (:require
    [clj-common.as :as as]
+   [clj-common.git :as git]
    [clj-common.io :as io]
    [clj-common.localfs :as fs]
    [clj-common.path :as path]
@@ -67,6 +68,75 @@
                context
                (str "deleted: " (path/path->string file))))))))))
 
+;; note: there is also clj-common.jvm/execute-command which could be used
+;; for workflows creation
+(defn execute-command [context]
+  (let [configuration (core/context-configuration context)
+        pwd (get configuration :pwd)
+        command (get configuration :command)]
+    (core/context-report context (str "pwd for command: " pwd))
+    (core/context-report context (str "executing command: " command))
+    (let [process (.exec (Runtime/getRuntime)
+                         command
+                         (into-array java.lang.String [])
+                         (new java.io.File pwd))
+          is (.getInputStream process)]
+      ;; wait process to finish to collect output
+      (.waitFor process)
+      (let [output (io/input-stream->line-seq is)]
+        (doseq [line output]
+          (core/context-report context line))))))
+
+(defn git-status-repo-root
+  "Checks all subdirs in given repo-root, assuming they are git repos.
+  Reports status of each in state"
+  [context]
+  (let [configuration (core/context-configuration context)
+        repo-root (get configuration :repo-root)
+        state-root (get configuration :state-root)]
+    (core/context-report context (str "git repo root: " (path/path->string repo-root)))
+    (core/context-report context (str "state root: " state-root))
+    (doseq [repo (fs/list repo-root)]
+      (when (fs/is-directory repo)
+        (core/context-report context (str "checking: " (last repo)))
+        (let [status (git/status repo)]
+          (core/context-report context (str (last repo) " " (name (:status status))))
+          (core/state-set
+           (concat state-root [(last repo) "status"])
+           (:status status)))))
+    (core/context-report context "finished")))
+
+#_(core/job-sumbit
+ (core/job-create
+  "test"
+  {
+   :repo-root ["Users" "vanja" "projects"]
+   :state-root ["git" "projects"]}
+  git-status-repo-root))
+
+#_(core/job-sumbit
+ (core/job-create
+  "test"
+  {
+   :pwd "/Users/vanja/"
+   :command "ps -ax"}
+  execute-command))
+
+#_(core/job-sumbit
+ (core/job-create
+  "test"
+  {
+   :pwd "/Users/vanja/"
+   :command "ls -lh /users/vanja"}
+  execute-command))
+
+#_(core/job-sumbit
+ (core/job-create
+  "test"
+  {
+   :pwd "/Users/vanja/projects/notes"
+   :command "git status"}
+  execute-command))
 
 ;; test directory watcher
 #_(let [match-fn (fn [file]

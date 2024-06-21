@@ -22,6 +22,7 @@
    [clj-geo.import.osm :as osm]
    [clj-geo.import.osmapi :as osmapi]
    [clj-geo.math.tile :as tile-math]
+   [clj-geo.visualization.map :as map]
    
    [clj-scheduler.core :as core]
    [clj-scheduler.env :as env]))
@@ -99,17 +100,20 @@
         1
 
         :else
-        (let [[region1 club1 number1] (.split id1 "-")
-              [region2 club2 number2] (.split id2 "-")
+        (let [[region1 mountain1 number1] (.split id1 "-")
+              [region2 mountain2 number2] (.split id2 "-")
               ;; hotfix for transversals, example: T-3-13
-              region1 (str (first (:region route1)))
-              region2 (str (first (:region route2)))]
+              region1 (if (= "T" region1) 0 region1)
+              region2 (if (= "T" region2) 0 region2)]
           (compare
-           (+ (* (as/as-long region1) 10000) (* (as/as-long club1) 100) (as/as-long number1))
-           (+ (* (as/as-long region2) 10000) (* (as/as-long club2) 100) (as/as-long number2)))))
+           (+ (* (as/as-long region1) 10000) (* (as/as-long mountain1) 100) (as/as-long number1))
+           (+ (* (as/as-long region2) 10000) (* (as/as-long mountain2) 100) (as/as-long number2)))))
       (catch Exception e
         (println "[EXCEPTION] Unable to compare: " id1 " with " id2)
         (throw (ex-info "Id compare problem" {:route1 route1 :route2 route2} e))))))
+
+#_(id-compare {:id "5-3-23"} {:id "5-24-1"}) ;; -1
+#_(id-compare {:id "T-3-13"} {:id "5-24-1"});; -1
 
 (defn render-route
   "prepares hiccup html for route"
@@ -140,20 +144,20 @@
       (if-let [osm-id (:id relation)]
         (list
           [:a {
-             :href (str "https://openstreetmap.org/relation/" osm-id)
+               :href (str "https://openstreetmap.org/relation/" osm-id)
                :target "_blank"} "osm"]
           [:br]
           [:a {
-             :href (str "http://localhost:7077/view/osm/history/relation/" osm-id)
+               :href (str "http://localhost:7077/view/osm/history/relation/" osm-id)
                :target "_blank"} "history"]
           [:br]
           [:a {
-             :href (str "http://localhost:7077/route/edit/" osm-id)
+               :href (str "http://localhost:7077/route/edit/" osm-id)
                :target "_blank"} "order edit"]          
           [:br]
           [:a {
-             :href (str "http://localhost:7077/projects/pss/check/" id)
-               :target "_blank"} "gpx check"]          
+               :href (str "http://localhost:7077/projects/pss/compare/" (get-in relation [:tags "ref"]))
+               :target "_blank"} "compare"]          
           [:br]
           [:a {
                :href (str
@@ -293,7 +297,7 @@
           content-path (path/child dataset-path "routes" (str oznaka ".html"))
           gpx-path (path/child dataset-path "routes" (str oznaka ".gpx"))]
       (println oznaka "-" title)
-      (println "\t" postid)
+      #_(println "\t" postid)
       (println "\t" link)
       ;; depending on use case either try all without gpx or info file
       ;; in case of gpx most htmls will change because of news
@@ -669,7 +673,7 @@
 
       ;; todo store on disk to decouple jobs
       (with-open [os (fs/output-stream (path/child osm-pss-integration-path "pss-dataset.edn"))]
-        (edn/write-object os routes)))))
+        (edn/write-pprint-object os routes)))))
 
 ;; load single route info
 #_(def a
@@ -970,9 +974,9 @@
 
       (let [routes (with-open [is (fs/input-stream (path/child integration-git-path "pss-dataset.edn"))]
                      (edn/read-object is))]        
+        (core/context-report job-context "Creating osm-pss-integration git files")
         ;; 20220817
         ;; table for data verification for PSS working group
-        (core/context-report job-context "Creating osm-pss-integration git files")
         (with-open [os (fs/output-stream (path/child integration-git-path "osm-status.tsv"))]
           (io/write-line os
                          (str
@@ -1008,6 +1012,22 @@
                                      :else
                                      nil)])
                                  "\""))))
+             (sort-by
+              #(get-in % [:tags "ref"])
+              (filter
+               #(contains? pss-set (get-in % [:tags "ref"]))
+               relation-seq)))))
+
+        ;; 20231210 tags for all pss hiking relations, to make tracking easier
+        (with-open [os (fs/output-stream (path/child integration-git-path "osm-relation-tags.txt"))]
+          (let [pss-set (into #{} (keys routes))]
+            (run!
+             (fn [relation]
+               (let [ref (get-in relation [:tags "ref"])]
+                 (io/write-line os (str (get relation :id)))
+                 (doseq [[tag value] (sort-by first (get relation :tags))]
+                   (io/write-line os (str "\t" tag " = " value)))
+                 (io/write-line os "")))
              (sort-by
               #(get-in % [:tags "ref"])
               (filter
@@ -1072,7 +1092,7 @@
                   (println "|-")
                   (println "|" (get-in relation [:tags "ref"]))
                   (println "|" (id->region id))
-                  (println "|" (or (:planina route)) "")
+                  (println "|" (or (:planina route) ""))
                   (println "|" (or (:uredjenost route) ""))
                   (println "|" (get-in relation [:tags "name:sr"]))
                   (println "|" (str "[" (get-in relation [:tags "website"]) " pss]"))
@@ -1531,6 +1551,71 @@
     (core/state-set state-done-node timestamp)
     (core/context-report job-context (str "state set at " state-done-node))))
 
+(defn extract-geojson-with-trails
+  "Creates GeoJSON containing each trail as single feature for each trail, containing all trail geometry. If trail is
+  not complete multiple features will be extracted"
+  [job-context]
+  (let [configuration (core/context-configuration job-context)
+        context (core/context-pipeline-adapter job-context)
+        channel-provider (pipeline/create-channels-provider)
+        resource-controller (pipeline/create-trace-resource-controller context)
+        osm-pss-integration-path (:osm-pss-integration-path configuration)
+        osm-pss-extract-path (:osm-pss-extract-path configuration)
+        state-done-node (get
+                         (core/context-configuration job-context)
+                         :state-done-node)
+        timestamp (System/currentTimeMillis)]
+    (let [dataset (load-pss-extract-as-dataset job-context)]
+      (core/context-report
+       job-context
+       "dataset loaded, writing trails")
+      (with-open [os (fs/output-stream (path/child
+                                        osm-pss-integration-path "trails.geojson"))]
+        (json/write-pretty-print
+         (geojson/geojson
+          (doall
+           (map
+            (fn [relation]
+              (let [ref (get-in relation [:tags "ref"])]
+                (core/context-report
+                 job-context
+                 (str "processing: " ref " (" (get relation :id) ")"))
+                (binding [geojson/*style-stroke-color* "#FF0000"
+                          geojson/*style-stroke-width* (cond
+                                                         (.startsWith ref "E")
+                                                         6
+                                                         (.startsWith ref "T")
+                                                         4
+                                                         :else
+                                                         2)]
+                  (geojson/multi-line-string
+                   {
+                    "ref" ref
+                    "osm-relation-id" (get relation :id)
+                    "name" (get-in relation [:tags "name"])
+                    "operator" (get-in relation [:tags "operator"])
+                    "website" (get-in relation [:tags "website"])
+                    "network" (get-in relation [:tags "network"])
+                    "distance" (get-in relation [:tags "distance"])}
+                   (filter
+                    some?
+                    (map
+                     (fn [member]
+                       (cond
+                         (= (:type member) :way)
+                         (map
+                          (fn [id]
+                            (get-in dataset [:nodes id]))
+                          (:nodes (get-in dataset [:ways (:id member)])))
+                         :else
+                         nil))
+                     (:members relation)))))))
+            (vals (:relations dataset)))))
+         (io/output-stream->writer os))))
+    
+    (core/state-set state-done-node timestamp)
+    (core/context-report job-context (str "state set at " state-done-node))))
+
 (defn create-trails-image
   "Draws trails on top of image generated from tiles"
   [job-context]
@@ -1644,4 +1729,100 @@
 
 
 
+;; todo impement as job
+;; todo remove ignore list in next iteration
+;; concept, run diff, commit what is ok, what is not resolve, iterate
+
+#_(let [original (with-open [is (fs/input-stream ["Users" "vanja" "projects" "pss-map-v1" "dataset" "trails.geojson"])]
+                 (json/read-keyworded is))
+      new (with-open [is (fs/input-stream ["Users" "vanja" "projects" "osm-pss-integration" "dataset" "trails.geojson"])]
+            (json/read-keyworded is))
+      ;; todo reset on each iteration
+      ignore #{"2-3-5" "1-2-1" "1-2-2" "1-2-3" "1-3-1" "1-4-1" "1-4-3" "1-4-4"
+               "1-4-5" "1-13-2" "2-3-1" "2-3-2"
+               "2-3-3" ;; lose mapirano
+               "2-3-6" "2-3-7"
+               "2-3-8"
+               "2-13-1" "2-14-19" "2-14-20" "2-14-21" "2-16-1"
+               "3-3-2" "3-7-1" "3-8-1" "3-8-2" "3-8-3" "3-13-1" "3-13-2"
+               "3-14-1" "3-14-2" "3-14-3" "3-14-4" "3-14-5" "3-14-6"
+               "3-14-7" "3-14-8" "3-18-1" "3-20-1" "3-20-3" "3-20-5" "3-20-7" "3-20-8" "3-20-9"
+               "3-22-1" "3-22-2" "3-22-3" "3-22-4"
+               "3-22-5" ;; promenio kokan proverice
+               "3-28-3"
+               "3-28-5" ; lose mapirano
+               "3-32-1" "3-34-1"
+               "4-4-3" "4-4-6" "4-4-7"
+               "4-23-1" "4-26-1"
+               "4-27-1" "4-27-2" "4-27-3" "4-27-4" "4-27-5" "4-27-6" "4-27-7" "4-27-8"
+               "4-29-1" "4-30-1" "4-31-1" "4-31-2" "4-31-4" "4-31-6" "4-31-11"
+               "4-31-14" "4-33-3" "4-33-6" "4-33-8" "4-33-9"
+               "4-36-1" "4-36-2" "4-37-1" "4-37-3" "4-42-1" "4-42-2" "4-47-2"
+               "4-47-7" "4-48-4" "4-49-1" "4-53-1"
+               "5-6-1" ""
+               }]
+  (let [original-ref-seq (map #(get-in % [:properties :ref]) (:features original))
+        new-ref-seq (map #(get-in % [:properties :ref]) (:features new))]
+    (println "original refs:" (count original-ref-seq))
+    (println "new refs:" (count new-ref-seq))
+    (let [new-ref-set (into #{} new-ref-seq)]
+      (doseq [ref original-ref-seq]
+        (when (not (contains? new-ref-set ref))
+          (println "[REMOVED]" ref))))
+    (let [original-ref-set (into #{} original-ref-seq)]
+      (doseq [ref new-ref-seq]
+        (when (not (contains? original-ref-set ref))
+          (println "[ADDED]" ref))))
+    ;; delete old report
+    (doseq [file (fs/list ["Users" "vanja" "projects" "osm-pss-integration" "dataset" "staze-pss-rs-diff"])]
+      (fs/delete file))
+    (doseq [new-trail (:features new)]
+      (let [ref (get-in new-trail [:properties :ref])]
+        (when-let [original-trail (first (filter
+                                          #(= (get-in % [:properties :ref]) ref)
+                                          (:features original)))]
+          (let [original-properties (:properties original-trail)
+                new-properties (:properties new-trail)
+                simplify-geom (fn [feature]
+                                (first
+                                 (reduce
+                                  (fn [[coordinates end] sequence]
+                                    (if (= end (first sequence))
+                                      [(concat coordinates (drop 1 sequence)) (last sequence)]
+                                      [(concat coordinates sequence) (last sequence)]))
+                                  [[] nil]
+                                  (:coordinates (:geometry feature)))))
+                original-geom (simplify-geom original-trail)
+                new-geom (simplify-geom new-trail)
+                osm-relation-id (get original-properties :osm-relation-id)
+                source-geojson (json/read-keyworded (http/get-as-stream
+                                                     (str "http://localhost:7077/route/source/"
+                                                          osm-relation-id)))]
+            (when (and
+                   (or
+                    (not (= original-properties new-properties))
+                    (not (= original-geom new-geom)))
+                   (not (contains? ignore ref)))
+              (println "[MODIFIED]" ref (str "(r" osm-relation-id ")"))
+              (with-open [os (fs/output-stream
+                              (path/child
+                               ["Users" "vanja" "projects" "osm-pss-integration" "dataset" "staze-pss-rs-diff" (str ref ".html")]))]
+                (io/write-string
+                 os
+                 (map/render-raw
+                  {}
+                  [
+                   (map/tile-layer-osm true)
+                   (map/tile-layer-bing-satellite false)
+                   (binding [geojson/*style-stroke-color* geojson/color-green
+                             geojson/*style-stroke-width* 16]
+                     (map/geojson-layer "original" original-trail true true))
+                   (binding [geojson/*style-stroke-color* geojson/color-red
+                             geojson/*style-stroke-width* 8]
+                     (map/geojson-layer "new" new-trail true true))
+                   (binding [geojson/*style-stroke-color* geojson/color-blue
+                             geojson/*style-stroke-width* 4]
+                     (map/geojson-layer "source gpx" source-geojson true true))])))
+              )))))
+    (println "[DONE]")))
 

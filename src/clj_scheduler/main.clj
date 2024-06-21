@@ -217,13 +217,17 @@
 
 (defn -main [& args]
   (println "scheduler started")
+  (println (str "http server running on: http://localhost:" env/http-server-port))
   (when (not (empty? args))
     (let [ns-to-load (first args)]
       (println "loading:" ns-to-load)
-      (load (.replace
-             (.replace ns-to-load "." "/")
-             "-" "_"))
+      ;; per load documentation path must begin with / to take it as full path
+      (load (str "/" (.replace (.replace ns-to-load "." "/") "-" "_")))
       (println "loaded:" ns-to-load))))
+
+;; auto load local presets
+;; remove in deployment
+(-main "clj-scheduler.presets.local")
 
 #_(core/job-sumbit
  (core/job-create
@@ -238,3 +242,5 @@
  {}
  job/hello-world)
 #_(core/trigger-unregister "hello-world")
+
+;; view at http://localhost:7076/ 
