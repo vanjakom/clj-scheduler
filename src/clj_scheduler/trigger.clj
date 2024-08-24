@@ -29,7 +29,9 @@
            current-value (core/state-get state-node)
            should-trigger (core/state-get ["trigger" name "should-trigger"])]
        (when (or should-trigger
-                 (nil? last-value)
+                 ;; 20240824 if state is not set, do not trigger, to support
+                 ;; running on new env without triggering all jobs
+                 #_(nil? last-value)
                  (and
                   (some? current-value)
                   (not (= last-value current-value))))
