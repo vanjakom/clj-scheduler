@@ -5,6 +5,7 @@
    [clj-common.context :as context]
    [clj-common.edn :as edn]
    [clj-common.localfs :as fs]
+   [clj-common.time :as time]
    [clj-scheduler.env :as env]))
 
 ;; concepts
@@ -80,20 +81,27 @@
 
 ;; api for retrieval / use of context
 
+;; old version, deprecated, use clj-common.context
+
+;; DEPRECATED, use context fns
 (defn context-report [context message]
-  ((:report-fn context) message))
+  (context/trace context message))
 
+;; DEPRECATED, use context fns
 (defn context-counter [context counter]
-  ((:inc-counter-fn context) counter))
+  (context/increment-counter context counter))
 
+;; DEPRECATED, use context fns
 (defn context-configuration [context]
-  (:configuration context))
+  (context/configuration context))
 
+;; DEPRECATED, use raw context
 (defn context-pipeline-adapter
   "Creates context that could be used by pipelines to report to
   clj-scheduler context"
   [context]
-  (context/wrap-scope
+  context
+  #_(context/wrap-scope
    (let [counter-fn (fn [scope counter]
                       (context-counter
                        context
@@ -146,6 +154,77 @@
                                      #(not (= % "completion"))
                                      (vals state-map))))))))})))
 
+;; todo
+;; finish implementation
+;; not using scope, should?
+
+(defn create-context [job]
+  (let [trace-fn (fn [scope trace]
+                   (swap!
+                    (:state job)
+                    update-in [:out] conj trace)
+                   (println trace))
+        counter-fn (fn [scope counter]
+                     (swap!
+                      (:state job)
+                      update-in
+                      [:counters
+                       (str
+                        (clojure.string/join "." scope)
+                        "." counter)]
+                      #(inc (or % 0))))
+        ;; support for pipeline integration
+        state-map (atom {})]
+    (context/wrap-scope
+     {
+      :scope-counter-fn counter-fn
+      :scope-trace-fn trace-fn
+      :scope-error-fn
+      (fn [scope throwable data]
+        (let [output (str
+                      (throwable->string throwable)
+                      (if-let [data data]
+                        (str "Data:\n" data)
+                        "No data"))]
+          (trace-fn scope output)
+          (counter-fn (clojure.string/join "." scope) "exception"))
+        nil)
+
+      :context-dump-fn (fn [] (throw (new Exception "Not implemented")))
+      :context-print-fn (fn [] (throw (new Exception "Not implemented")))
+      
+      :store-get state-get
+
+      :store-set state-set
+
+      ;; additional info in context, should add to main one?
+      :id (:id job)
+      :name (:name job)
+      :configuration (:configuration job)
+
+      ;; support for pipeline integration
+      :scope-state-fn (fn [scope state]
+                        ;; concurrent update is not possible
+                        (let [current (get (deref state-map) scope)]
+                          (when (not (= state current))
+                            (swap! state-map assoc scope state)
+                            (trace-fn
+                             scope
+                             (str
+                              "[STATE] " scope " from " current " to " state)))))
+      :pipeline-complete-fn (fn []
+                              (let [state-map (deref state-map)]
+                                (and
+                                 ;; hack to solve call to wait before first go
+                                 ;; todo solve better
+                                 (> (count state-map) 0)
+                                 (not
+                                  (some?
+                                   (first
+                                    (filter
+                                     #(not (= % "completion"))
+                                     (vals state-map))))))))})))
+
 (defn wait-pipeline-job
   "Waits all actors finish ( move to completion state )"
   [pipeline-context]
@@ -175,6 +254,7 @@
 
 #_(jobs-cleanup 20)
 
+;; todo single workweassumed, not thread safe
 (def worker-thread-main
   (new
    Thread
@@ -189,26 +269,10 @@
                               #(= (:status (deref (:state %))) :waiting)
                               (deref jobs))))]
           (do
-            (println "[main-worker] running job: " (:id job) )
+            #_(println "[main-worker] running job: " (:id job) )
             (swap! (:state job) assoc :status :running)
-            (let [context {
-                           :id (:id job)
-                           :name (:name job)
-                           :configuration (:configuration job)
-                           :report-fn (fn [line]
-                                        (swap!
-                                         (:state job)
-                                         update-in
-                                         [:out]
-                                         conj
-                                         line)
-                                        (println line))
-                           :inc-counter-fn (fn [counter]
-                                             (swap!
-                                              (:state job)
-                                              update-in
-                                              [:counters counter]
-                                              #(inc (or % 0))))}]
+            (let [context (create-context job)]
+              (println context)
               (try
                 ((:fn job) context)
                 (swap! (:state job) assoc :status :finished)
@@ -246,20 +310,43 @@
        (doseq [[name trigger] (deref triggers)]
          ;; must be string because it's altered over ui
          (when (not (= "true" (state-get ["system" "trigger" "pause"])))
-          (let [context {
-                         :name name
-                         :configuration (:configuration trigger)
-                         :report-fn (fn [line]
-                                      (swap!
-                                       triggers
-                                       update-in [name :state :out]
-                                       #(take-last 100 (conj % line))))
-                         :inc-counter-fn (fn [counter]
-                                           (swap!
-                                            triggers
-                                            update-in
-                                            [name :state :counters counter]
-                                            #(inc (or % 0))))}]
+           (let [context (context/wrap-scope
+                          {
+                           :scope-counter-fn
+                           (fn [scope counter]
+                             ;; todo ignoring scope
+                             (swap!
+                              triggers
+                              update-in
+                              [name :state :counters counter]
+                              #(inc (or % 0)))
+                             nil)
+                           :scope-trace-fn
+                           (fn [scope trace]
+                             ;; todo ignoring scope
+                             (swap!
+                              triggers
+                              update-in [name :state :out]
+                              #(take-last 100 (conj % trace)))
+                             (println trace))
+                           
+                           :scope-state-fn
+                           (fn [scope state]
+                             nil)
+                           :scope-error-fn
+                           (fn [scope throwable data]
+                             nil)
+
+                           :store-get
+                           (fn [keys] nil)
+
+                           :store-set
+                           (fn [keys] nil)
+
+                           ;; additional info in context, should add to main one?
+                           :id (str name "-" (time/timestamp))
+                           :name name
+                           :configuration (:configuration trigger)})]
             (try
               ((:trigger-fn trigger) context)
               (catch Exception e
