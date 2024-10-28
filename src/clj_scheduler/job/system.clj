@@ -98,9 +98,9 @@
     (core/context-report context (str "state root: " state-root))
     (doseq [repo (fs/list repo-root)]
       (when (fs/is-directory repo)
-        (core/context-report context (str "checking: " (last repo)))
+        #_(core/context-report context (str "checking: " (last repo)))
         (let [status (git/status repo)]
-          (core/context-report context (str (last repo) " " (name (:status status))))
+          (core/context-report context (str "[" (name (:status status)) "] " (last repo)))
           (core/state-set
            (concat state-root [(last repo) "status"])
            (:status status)))))
