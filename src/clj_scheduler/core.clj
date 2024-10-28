@@ -284,7 +284,8 @@
             (state-set ["system" "worker" "main" "last"] (System/currentTimeMillis))
             (java.lang.Thread/sleep 5000))))
        (catch Exception e
-         (println "[main-worker] exiting"))))))
+         (println "[main-worker] exiting")
+         (.printStackTrace e))))))
 (.start worker-thread-main)
 #_(.interrupt worker-thread-main)
 

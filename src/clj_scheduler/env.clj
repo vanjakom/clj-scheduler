@@ -11,7 +11,7 @@
 
 (def state-path (path/string->path
                  (or
-                  (jvm/environment-variable "CLJ-SCHEDULER-STATE-PATH")
+                  (jvm/environment-variable "CLJ_SCHEDULER_STATE_PATH")
                   "/home/ec2-user/clj-scheduler-state.edn")))
 #_(println state-path)
 
