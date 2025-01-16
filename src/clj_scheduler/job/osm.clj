@@ -2,10 +2,12 @@
   (:use
    clj-common.clojure)
   (:require
+   [clj-http.client :as http-client]
+   [clojure.java.io :as clojure-io]
    [clj-common.2d :as draw]
    [clj-common.context :as context]
-   [clj-common.http :as http]
    [clj-common.io :as io]
+   [clj-common.http :as http]
    [clj-common.localfs :as fs]
    [clj-common.path :as path]
    [clj-common.pipeline :as pipeline]
@@ -14,6 +16,11 @@
 
 ;; legacy from old trek-mate times
 (def active-pipeline nil)
+
+;; in case of problems with download use
+;; cd /Users/vanja/dataset-local/geofabrik-serbia
+;; wget -O "serbia-$(date +%s)000.osm.pbf" "http://download.geofabrik.de/europe/serbia-latest.osm.pbf" && ln -sf "$(ls -t serbia-*.osm.pbf | head -n 1)" serbia-latest.osm.pbf
+;; then manual trigger split process
 
 (defn download-latest-geofabrik-serbia [context]
   (let [state-done-node (get (core/context-configuration context) :state-done-node)
@@ -30,9 +37,13 @@
        (str "store path created: " (path/path->string store-path))))
     ;; todo use date from html page for timestamp
     (core/context-report context "downloading latest Geofabrik OSM dump for Serbia")
-    (with-open [is (http/get-as-stream upstream-url)
-                os (fs/output-stream download-path)]
-      (io/copy-input-to-output-stream is os))
+    ;; 20250104
+    ;; looks like problem is "sleep" on new mac
+    ;; replacing clj-common.http and clj-common.io with direct clj-http and
+    ;; clojure libs ( as suggested by chat gpt )
+    (with-open [is (:body (http-client/get upstream-url {:as :stream}))
+                os (clojure-io/output-stream (path/path->string download-path))]
+      (clojure-io/copy is os))
     (core/context-report context "latest Serbia OSM dump downloaded")
     (when (fs/exists? latest-path)
       (fs/delete latest-path))
@@ -43,6 +54,17 @@
     (core/state-set state-done-node timestamp)
     (core/context-report context (str "state set at " state-done-node))))
 
+;; testing just download
+#_(let [upstream-url "http://download.geofabrik.de/europe/serbia-latest.osm.pbf"
+        store-path ["Users" "vanja" "dataset-local" "geofabrik-serbia"]
+        timestamp (System/currentTimeMillis)
+        download-path (path/child store-path (str "serbia-" timestamp ".osm.pbf"))]
+    (with-open [is (http/get-as-stream upstream-url)
+                os (fs/output-stream download-path)]
+      (println "starting download")
+      (io/copy-input-to-output-stream is os)
+      (println "finished download")))
+
 (defn split-geofabrik-pbf-nwr [job-context]
   (let [context (core/context-pipeline-adapter job-context)
         channel-provider (pipeline/create-channels-provider)
@@ -51,11 +73,11 @@
                       (core/context-configuration job-context)
                       :osm-pbf-path)
         osm-node-path (get
-                      (core/context-configuration job-context)
-                      :osm-node-path)
+                       (core/context-configuration job-context)
+                       :osm-node-path)
         osm-node-with-tags-path (get
-                      (core/context-configuration job-context)
-                      :osm-node-with-tags-path)        
+                                 (core/context-configuration job-context)
+                                 :osm-node-with-tags-path)
         osm-way-path (get
                       (core/context-configuration job-context)
                       :osm-way-path)

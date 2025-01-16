@@ -269,16 +269,19 @@
                               #(= (:status (deref (:state %))) :waiting)
                               (deref jobs))))]
           (do
-            #_(println "[main-worker] running job: " (:id job) )
+            (println "[main-worker] running job: " (:id job) )
             (swap! (:state job) assoc :status :running)
             (let [context (create-context job)]
-              (println context)
               (try
+                (context/trace context "starting job")
                 ((:fn job) context)
                 (swap! (:state job) assoc :status :finished)
                 (catch Exception e
                   ;; todo capture exception to log
-                  (.printStackTrace e)
+                  (println "exception in job" (:id job))
+                  (println (format-stack-trace e))
+                  (context/trace context "exception in job")
+                  (context/trace context (format-stack-trace e))
                   (swap! (:state job) assoc :status :failed)))))
           (do
             (state-set ["system" "worker" "main" "last"] (System/currentTimeMillis))
@@ -288,7 +291,6 @@
          (.printStackTrace e))))))
 (.start worker-thread-main)
 #_(.interrupt worker-thread-main)
-
 
 (def triggers (atom {}))
 
