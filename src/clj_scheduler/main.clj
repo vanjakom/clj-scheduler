@@ -58,70 +58,76 @@
     (compojure.core/GET
      "/"
      _
-     {
-      :status 200
-      :headers {
-                "Content-Type" "text/html; charset=utf-8"}
-      :body (hiccup/html
-             [:body  {:style "font-family:arial;"}
-              (let [timestamp (System/currentTimeMillis)
-                    scheduler-timestamp (core/state-get ["system" "trigger" "last"])
-                    worker-timestamp (core/state-get ["system" "worker" "main" "last"])]
-                (if (< (- timestamp scheduler-timestamp) (* 60 1000))
-                  (if (= "true" (core/state-get ["system" "trigger" "pause"]))
-                    [:div
-                     "scheduler is paused"
-                     [:a {:href "/state/set/system/trigger/pause/false"} "(continue trigger)"]]
-                    [:div
-                     "scheduler is active"
-                     [:a {:href "/state/set/system/trigger/pause/true"} "(pause trigger)"]])
-                  [:div "scheduler is not active"]))
-              [:br]
-              [:div "jobs:"]
-              [:br]
-              [:table {:style "border-collapse:collapse;"}
-               (map
-                (fn [job]
-                  (let [state (deref (:state job))
-                        status (:status state)]
-                    [:tr
-                     [:td {:style "border: 1px solid black; padding: 5px;"}
-                      [:a {:href (str "/job/" (:id job)) :target "_blank"} (:id job)]]
-                     [:td {:style "border: 1px solid black; padding: 5px;"} (:name job)]
-                     [:td {:style "border: 1px solid black; padding: 5px;"} status]
-                     [:td {:style "border: 1px solid black; padding: 5px;"}
-                      (when (not (= status :running))
-                        [:a {:href (str "/job/" (:id job) "/remove") :target "_blank"}
-                         "remove"])]
-                     ]))
-                (reverse
-                 (sort-by
-                  :submitted-at
-                  (deref core/jobs))))]
-              [:br]
-              [:br]
-              [:div "triggers:"]
-              [:br]
-              [:table {:style "border-collapse:collapse;"}
-               (map
-                (fn [[name trigger]]
-                  [:tr
-                   [:td {:style "border: 1px solid black; padding: 5px;"}
-                    [:a {:href (str "/trigger/" (url-encode name))
-                         :target "_blank"}
-                     name]]
-                   [:td {:style "border: 1px solid black; padding: 5px;"}
-                    [:a {:href (str "/trigger/" (url-encode name) "/manual")
-                         :target "_blank"}
-                     "manual trigger"]]])
-                (sort-by first (deref core/triggers)))]
-              [:br]
-              [:br]
-              [:div "state:"]
-              [:br]
-              [:table {:style "border-collapse:collapse;"}
-               (html-state->table [] (deref core/state))]
-              [:br]])})
+     (try
+       {
+        :status 200
+        :headers {
+                  "Content-Type" "text/html; charset=utf-8"}
+        :body (hiccup/html
+                  [:body  {:style "font-family:arial;"}
+                   (let [timestamp (System/currentTimeMillis)
+                         scheduler-timestamp (core/state-get ["system" "trigger" "last"])
+                         worker-timestamp (core/state-get ["system" "worker" "main" "last"])]
+                     (if (< (- timestamp scheduler-timestamp) (* 60 1000))
+                       (if (= "true" (core/state-get ["system" "trigger" "pause"]))
+                         [:div
+                          "scheduler is paused"
+                          [:a {:href "/state/set/system/trigger/pause/false"} "(continue trigger)"]]
+                         [:div
+                          "scheduler is active"
+                          [:a {:href "/state/set/system/trigger/pause/true"} "(pause trigger)"]])
+                       [:div "scheduler is not active"]))
+                   [:br]
+                   [:div "jobs:"]
+                   [:br]
+                   [:table {:style "border-collapse:collapse;"}
+                    (map
+                     (fn [job]
+                       (let [state (deref (:state job))
+                             status (:status state)]
+                         [:tr
+                          [:td {:style "border: 1px solid black; padding: 5px;"}
+                           [:a {:href (str "/job/" (:id job)) :target "_blank"} (:id job)]]
+                          [:td {:style "border: 1px solid black; padding: 5px;"} (:name job)]
+                          [:td {:style "border: 1px solid black; padding: 5px;"} status]
+                          [:td {:style "border: 1px solid black; padding: 5px;"}
+                           (when (not (= status :running))
+                             [:a {:href (str "/job/" (:id job) "/remove") :target "_blank"}
+                              "remove"])]
+                          ]))
+                     (reverse
+                      (sort-by
+                       :submitted-at
+                       (deref core/jobs))))]
+                   [:br]
+                   [:br]
+                   [:div "triggers:"]
+                   [:br]
+                   [:table {:style "border-collapse:collapse;"}
+                    (map
+                     (fn [[name trigger]]
+                       [:tr
+                        [:td {:style "border: 1px solid black; padding: 5px;"}
+                         [:a {:href (str "/trigger/" (url-encode name))
+                              :target "_blank"}
+                          name]]
+                        [:td {:style "border: 1px solid black; padding: 5px;"}
+                         (type (:trigger-fn trigger))]
+                        [:td {:style "border: 1px solid black; padding: 5px;"}
+                         [:a {:href (str "/trigger/" (url-encode name) "/manual")
+                              :target "_blank"}
+                          "manual trigger"]]])
+                     (sort-by first (deref core/triggers)))]
+                   [:br]
+                   [:br]
+                   [:div "state:"]
+                   [:br]
+                   [:table {:style "border-collapse:collapse;"}
+                    (html-state->table [] (deref core/state))]
+                   [:br]])}
+       (catch Exception e
+         (.printStackTrace e)
+         {:status 500})))
 
     ;; todo expose state manupulation ( get, set ) over http
 
@@ -216,6 +222,9 @@
          (core/state-unset node)
          (ring.util.response/redirect "/")))))))
 
+
+#_(deref core/jobs)
+#_(swap! core/jobs (constantly (list)))
 
 (defn -main [& args]
   (start-server)

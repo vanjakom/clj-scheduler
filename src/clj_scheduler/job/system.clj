@@ -1,6 +1,7 @@
 (ns clj-scheduler.job.system
   (:require
    [clj-common.as :as as]
+   [clj-common.context :as context]
    [clj-common.git :as git]
    [clj-common.io :as io]
    [clj-common.localfs :as fs]
@@ -16,6 +17,11 @@
     (core/context-report context "jobs cleanup finished")))
 
 ;; todo, maybe better to use create functions like for trigger
+
+(defn state-set-timestamp [context]
+  (let [node (get (context/configuration context) :node)]
+    (context/trace context (str "setting timestamp to: " node))
+    (core/state-set node (System/currentTimeMillis))))
 
 (defn ensure-directory [context]
   (let [configuration (core/context-configuration context)
@@ -87,6 +93,38 @@
         (doseq [line output]
           (core/context-report context line))))))
 
+(defn execute-command-seq [context]
+  (let [configuration (core/context-configuration context)
+        pwd (get configuration :pwd)
+        command-seq (get configuration :command-seq)]
+    (core/context-report context (str "pwd: " pwd))
+    (loop [command (first command-seq)
+           queue (rest command-seq)]
+      (core/context-report context (str "executing command: " command))
+      (let [process (.exec (Runtime/getRuntime)
+                           (into-array ["bash" "-c" command])
+                           (into-array java.lang.String [])
+                           (new java.io.File pwd))
+            is (.getInputStream process)]
+        ;; wait process to finish to collect output
+        (.waitFor process)
+        (let [output (io/input-stream->line-seq is)]
+          (doseq [line output]
+            (core/context-report context line)))
+        (if (== 0 (.exitValue process))
+          (if (some? (first queue))
+            (recur (first queue) (rest queue))
+            (context/trace context "execution finished"))
+          (context/trace context "command failed"))))))
+
+#_(execute-command-seq
+ (context/create-stdout-context
+  {
+   :pwd "/Users/vanja/projects/zanimljiva-geografija"
+   :command-seq [
+                 "git add blog/kako_mapirati.md"
+                 "(git commit -m 'test' && git push) || true"]}))
+
 (defn git-status-repo-root
   "Checks all subdirs in given repo-root, assuming they are git repos.
   Reports status of each in state"
@@ -107,12 +145,12 @@
     (core/context-report context "finished")))
 
 #_(core/job-sumbit
- (core/job-create
-  "test"
-  {
-   :repo-root ["Users" "vanja" "projects"]
-   :state-root ["git" "projects"]}
-  git-status-repo-root))
+   (core/job-create
+    "test"
+    {
+     :repo-root ["Users" "vanja" "projects"]
+     :state-root ["git" "projects"]}
+    git-status-repo-root))
 
 #_(core/job-sumbit
  (core/job-create
