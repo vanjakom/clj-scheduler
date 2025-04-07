@@ -15,6 +15,7 @@
    [clj-common.localfs :as fs]
    [clj-common.path :as path]
    [clj-common.pipeline :as pipeline]
+   [clj-common.text :as text]
    [clj-common.view :as view]
 
    [clj-geo.import.geojson :as geojson]
@@ -63,7 +64,27 @@
    "4-31-9" "gpx problematičan, dosta odstupanja"
    
    ;; "2-16-1" "dosta odstupanje, staza nije markirana 20200722, srednjeno 20221213"
+
+
+   "E7-10-11" "20250323 mislim da je stara spojena verzija 10 i 11. preskocio u mapiranju, cimao slobodana"
+   "E7-10-4" "20250323 segment E7-10, pitao slobodana, preskocio u mapiranju"
+   "E7-10-5" "20250323 segment E7-10, pitao slobodana, preskocio u mapiranju"
+   "E7-10-6" "20250323 segment E7-10, pitao slobodana, preskocio u mapiranju"
+
+   "E7-11-1" "20250323 segment E7-11, preskocio u mapiranju za sada, proveriti sa slobodanom"
+   "E7-11-2" "20250323 segment E7-11, preskocio u mapiranju za sada, proveriti sa slobodanom"
+   "E7-11-3" "20250323 segment E7-11, preskocio u mapiranju za sada, proveriti sa slobodanom"
+   "E7-11-4" "20250323 segment E7-11, preskocio u mapiranju za sada, proveriti sa slobodanom"
+   "E7-11-5" "20250323 segment E7-11, preskocio u mapiranju za sada, proveriti sa slobodanom"
+
+   "E7-12-1" "20250323 segment E7-12, preskocio u mapiranju za sada, proveriti sa slobodanom"
+   "E7-12-2" "20250323 segment E7-12, preskocio u mapiranju za sada, proveriti sa slobodanom"
+   "E7-12-3" "20250323 segment E7-12, preskocio u mapiranju za sada, proveriti sa slobodanom"
+   "E7-12-4" "20250323 segment E7-12, preskocio u mapiranju za sada, proveriti sa slobodanom"
+   "E7-12-5" "20250323 segment E7-12, preskocio u mapiranju za sada, proveriti sa slobodanom"
+   "E7-12-6" "20250323 segment E7-12, preskocio u mapiranju za sada, proveriti sa slobodanom"
    })
+
 
 (defn id->region
   [id]
@@ -137,7 +158,25 @@
      [:td {:style "border: 1px solid black; padding: 5px; width: 600px;"}
       (:title route )
       [:br]
-      (get-in relation [:tags "name"])]
+      (if-let [osm-id (:id relation)]
+        (get-in relation [:tags "name"])
+        (str
+         "type = route<br>"
+         "route = hiking<br>"
+         "network = rwn<br>"
+         "source = pss_staze<br>"
+         "operator = " (:drustvo route) "<br>"
+         "ref = " id "<br>"
+         "osmc:symbol = red:red_round::" (last (.split id "-")) ":white<br>"
+         "name = " (text/latin->cyrillic (:title route))"<br>"
+         "name:sr = " (text/latin->cyrillic (:title route)) "<br>"
+         "name:sr-Latn = " (:title route) "<br>"
+         "website = " (:link route) "<br>"
+         "ascent = <br>"
+         "descent = <br>"
+         "distance =  km<br>"
+         "roundtrip = <br>"))]
+     
      [:td {:style "border: 1px solid black; padding: 5px; width: 40px; text-align: center;"}
       [:a {:href (:link route) :target "_blank"} "pss"]]
      [:td {:style "border: 1px solid black; padding: 5px; width: 80px; text-align: center;"}
@@ -163,7 +202,8 @@
                :href (str
                       "https://www.openstreetmap.org/edit?editor=id"
                       "&relation=" osm-id
-                      "&#gpx=" (url-encode (str "http://localhost:7077/projects/pss/raw/" id ".gpx")))
+                      "&#gpx=https%3A%2F%2Fraw.githubusercontent.com%2Fvanjakom%2Fosm-pss-integration%2Fmaster%2Fdataset%2Fpss.rs%2Froutes%2F"
+                      id ".geojson")
 
                ;; looks like editor is not working with file:// urls
                #_(str
@@ -188,197 +228,203 @@
         [:a {
              :href (str
                     "https://www.openstreetmap.org/edit?editor=id"
-                    "&#gpx=" (url-encode (str "http://localhost:7077/projects/pss/raw/" id ".gpx")))
+                    "&#gpx=https%3A%2F%2Fraw.githubusercontent.com%2Fvanjakom%2Fosm-pss-integration%2Fmaster%2Fdataset%2Fpss.rs%2Froutes%2F"
+                    id ".geojson")
              :target "_blank"} "iD edit"])]
      [:td {:style "border: 1px solid black; padding: 5px; width: 100px;"}
       note]]))
 
 ;; todo
 ;; extract jobs from download routines
-(def dataset-path (path/child env/dataset-git-path "pss.rs"))
-;; process https://pss.rs/planinarski-objekti-i-tereni/tereni/?tip=planinarski-putevi
-;; download routes list and supporting files
-#_(with-open [is (http/get-as-stream "https://pss.rs/planinarski-objekti-i-tereni/tereni/?tip=planinarski-putevi")]
-  (let [terrains-obj (json/read-keyworded
-                      (.replace
-                       (.trim
-                        (first
-                         (filter
-                          #(.contains % "var terrainsObj =")
-                          (io/input-stream->line-seq is))))
-                       "var terrainsObj = " ""))
-        georegions-geojson-url (:geojsonPath terrains-obj)
-        georegions (:geoRegions terrains-obj)
-        map-european-path-url (:pss_evropski_pesacki_putevi_mapa terrains-obj)
-        map-european-path-serbia-url (:pss_evropski_pesacki_putevi_srbija_mapa terrains-obj)
-        types (:types terrains-obj)
-        terrains (:terrains terrains-obj)
-        posts (:posts terrains-obj)]
-    
-    ;; write regions geojson
-    (with-open [is (http/get-as-stream georegions-geojson-url)
-                os (fs/output-stream (path/child dataset-path "regions.geojson"))]
-      (io/copy-input-to-output-stream is os))
+(def dataset-path (path/child env/projects-path "osm-pss-integration" "dataset" "pss.rs"))
 
-    ;; write region description json
-    (with-open [os (fs/output-stream (path/child dataset-path "regions.json"))]
-      (json/write-to-stream georegions os))
+(defn crawl-website [context]
+  ;; process https://pss.rs/planinarski-objekti-i-tereni/tereni/?tip=planinarski-putevi
+  ;; download routes list and supporting files
+  (context/trace context "downloading trails and supporting files")
+  (with-open [is (http/get-as-stream "https://pss.rs/planinarski-objekti-i-tereni/tereni/?tip=planinarski-putevi")]
+    (let [terrains-obj (json/read-keyworded
+                        (.replace
+                         (.trim
+                          (first
+                           (filter
+                            #(.contains % "var terrainsObj =")
+                            (io/input-stream->line-seq is))))
+                         "var terrainsObj = " ""))
+          georegions-geojson-url (:geojsonPath terrains-obj)
+          georegions (:geoRegions terrains-obj)
+          map-european-path-url (:pss_evropski_pesacki_putevi_mapa terrains-obj)
+          map-european-path-serbia-url (:pss_evropski_pesacki_putevi_srbija_mapa terrains-obj)
+          types (:types terrains-obj)
+          terrains (:terrains terrains-obj)
+          posts (:posts terrains-obj)]
+      
+      ;; write regions geojson
+      (with-open [is (http/get-as-stream georegions-geojson-url)
+                  os (fs/output-stream (path/child dataset-path "regions.geojson"))]
+        (io/copy-input-to-output-stream is os))
 
-    ;; write european paths map
-    (with-open [is (http/get-as-stream map-european-path-url)
-                os (fs/output-stream (path/child dataset-path "mapa-evropski-pesacki-putevi.jpg"))]
-      (io/copy-input-to-output-stream is os))
+      ;; write region description json
+      (with-open [os (fs/output-stream (path/child dataset-path "regions.json"))]
+        (json/write-to-stream georegions os))
 
-    ;; write european paths serbia map
-    (with-open [is (http/get-as-stream map-european-path-serbia-url)
-                os (fs/output-stream (path/child dataset-path "mapa-evropski-pesacki-putevi-u-srbiji.jpg"))]
-      (io/copy-input-to-output-stream is os))
+      ;; write european paths map
+      (with-open [is (http/get-as-stream map-european-path-url)
+                  os (fs/output-stream (path/child dataset-path "mapa-evropski-pesacki-putevi.jpg"))]
+        (io/copy-input-to-output-stream is os))
 
-    ;; write objects
-    (with-open [os (fs/output-stream (path/child dataset-path "types.json"))]
-      (json/write-pretty-print types (io/output-stream->writer os)))
-    (with-open [os (fs/output-stream (path/child dataset-path "terrains.json"))]
-      (json/write-pretty-print terrains (io/output-stream->writer os)))
-    (with-open [os (fs/output-stream (path/child dataset-path "posts.json"))]
-      (json/write-pretty-print posts (io/output-stream->writer os))))
-    (println "trails list downloaded from pss website"))
+      ;; write european paths serbia map
+      (with-open [is (http/get-as-stream map-european-path-serbia-url)
+                  os (fs/output-stream (path/child dataset-path "mapa-evropski-pesacki-putevi-u-srbiji.jpg"))]
+        (io/copy-input-to-output-stream is os))
 
-;; process https://pss.rs/planinarski-objekti-i-tereni/tereni/?tip=planinarske-transverzale
-;; download routes list only
-#_(with-open [is (http/get-as-stream "https://pss.rs/planinarski-objekti-i-tereni/tereni/?tip=planinarske-transverzale")]
-  (let [terrains-obj (json/read-keyworded
-                      (.replace
-                       (.trim
-                        (first
-                         (filter
-                          #(.contains % "var terrainsObj =")
-                          (io/input-stream->line-seq is))))
-                       "var terrainsObj = " ""))
-        posts (:posts terrains-obj)]
+      ;; write objects
+      (with-open [os (fs/output-stream (path/child dataset-path "types.json"))]
+        (json/write-pretty-print types (io/output-stream->writer os)))
+      (with-open [os (fs/output-stream (path/child dataset-path "terrains.json"))]
+        (json/write-pretty-print terrains (io/output-stream->writer os)))
+      (with-open [os (fs/output-stream (path/child dataset-path "posts.json"))]
+        (json/write-pretty-print posts (io/output-stream->writer os)))))
+  (context/trace context "trails list downloaded from pss website")
+  
+  ;; process https://pss.rs/planinarski-objekti-i-tereni/tereni/?tip=planinarske-transverzale
+  ;; download routes list only
+  (context/trace context "downloading transversals")
+  (with-open [is (http/get-as-stream "https://pss.rs/planinarski-objekti-i-tereni/tereni/?tip=planinarske-transverzale")]
+    (let [terrains-obj (json/read-keyworded
+                        (.replace
+                         (.trim
+                          (first
+                           (filter
+                            #(.contains % "var terrainsObj =")
+                            (io/input-stream->line-seq is))))
+                         "var terrainsObj = " ""))
+          posts (:posts terrains-obj)]
 
-    (with-open [os (fs/output-stream (path/child dataset-path "posts-transversal.json"))]
-      (json/write-pretty-print posts (io/output-stream->writer os))))
-    (println "transversals list downloaded from pss website"))
+      (with-open [os (fs/output-stream (path/child dataset-path "posts-transversal.json"))]
+        (json/write-pretty-print posts (io/output-stream->writer os)))))
+  (context/trace context "transversals list downloaded from pss website")
 
-;; process https://pss.rs/planinarski-objekti-i-tereni/tereni/?tip=evropski-pesacki-putevi-u-srbiji
-;; download routes list only
-#_(with-open [is (http/get-as-stream "https://pss.rs/planinarski-objekti-i-tereni/tereni/?tip=evropski-pesacki-putevi-u-srbiji")]
-  (let [terrains-obj (json/read-keyworded
-                      (.replace
-                       (.trim
-                        (first
-                         (filter
-                          #(.contains % "var terrainsObj =")
-                          (io/input-stream->line-seq is))))
-                       "var terrainsObj = " ""))
-        posts (:posts terrains-obj)]
+  ;; process https://pss.rs/planinarski-objekti-i-tereni/tereni/?tip=evropski-pesacki-putevi-u-srbiji
+  ;; download routes list only
+  (context/trace context "download e paths")
+  (with-open [is (http/get-as-stream "https://pss.rs/planinarski-objekti-i-tereni/tereni/?tip=evropski-pesacki-putevi-u-srbiji")]
+    (let [terrains-obj (json/read-keyworded
+                        (.replace
+                         (.trim
+                          (first
+                           (filter
+                            #(.contains % "var terrainsObj =")
+                            (io/input-stream->line-seq is))))
+                         "var terrainsObj = " ""))
+          posts (:posts terrains-obj)]
 
-    (with-open [os (fs/output-stream (path/child dataset-path "posts-e-paths.json"))]
-      (json/write-pretty-print posts (io/output-stream->writer os))))
-    (println "E paths list downloaded from pss website"))
+      (with-open [os (fs/output-stream (path/child dataset-path "posts-e-paths.json"))]
+        (json/write-pretty-print posts (io/output-stream->writer os)))))
+  (context/trace context "E paths list downloaded from pss website")
 
-
-
-;; download route info and gpx if exists, supports restart
-#_(let [posts (concat
-             (with-open [is (fs/input-stream (path/child dataset-path "posts.json"))]
-               (json/read-keyworded is))
-             (with-open [is (fs/input-stream (path/child dataset-path "posts-transversal.json"))]
-               (json/read-keyworded is))
-             (with-open [is (fs/input-stream (path/child dataset-path "posts-e-paths.json"))]
-               (json/read-keyworded is)))]
-  (doseq [post posts]
-    (let [post (update-in post [:postmeta] #(view/seq->map :label %))
-          postid (:ID post)
-          title (:title post)
-          link (:permalink post)
-          oznaka (get-in post [:postmeta "Oznaka" :value])
-          info-path (path/child dataset-path "routes" (str oznaka ".json"))
-          content-path (path/child dataset-path "routes" (str oznaka ".html"))
-          gpx-path (path/child dataset-path "routes" (str oznaka ".gpx"))]
-      (println oznaka "-" title)
-      #_(println "\t" postid)
-      (println "\t" link)
-      ;; depending on use case either try all without gpx or info file
-      ;; in case of gpx most htmls will change because of news
-      (if (not (empty? oznaka))
-        (if (not
-             (fs/exists? gpx-path)
-             ;; (fs/exists? info-path)
-             )
-          (do
-            (println "\tdownloading post ...")
-            (let [content (io/input-stream->string (http/get-as-stream link))
-                  gpx (if-let [gpx (second
-                                    (re-find
-                                     #"<tr><th>GPX</th><td><a href=\"(.+?)\""
-                                     content))]
-                        (.trim gpx))
-                  region (when-let [region (second
-                                            (re-find
-                                             #"<tr><th>Region</th><td>(.+?)</td>"
-                                             content))]
-                           (.trim region))
-                  uredjenost (when-let [uredjenost (second
-                                                    (re-find
-                                                     #"<tr><th>Uređenost</th><td>(.+?)</td>"
-                                                     content))]
-                               (.trim uredjenost))
-                  planina (or
-                           (when-let [planina (second
-                                               (re-find
-                                                #"<tr><th>Planina/predeo</th><td>(.+?)</td>"
-                                                content))]
-                             (.trim planina))
-                           (when-let [planine (second
-                                               (re-find
-                                                #"<tr><th>Planine/predeli</th><td>(.+?)</td>"
-                                                content))]
-                             (.trim planine)))
-                  info {
-                        :id oznaka
-                        :gpx gpx
-                        :region region
-                        :title title
-                        :uredjenost uredjenost
-                        :planina planina
-                        :link link}]
-              (with-open [os (fs/output-stream info-path)]
-                (json/write-pretty-print info (io/output-stream->writer os)))
-              (with-open [os (fs/output-stream content-path)]
-                (io/write-string os content))
-              (when (not (empty? gpx))
-                (println "\tdownloading gpx ...")
-                (if (not (fs/exists? gpx-path))
-                  (if-let [is (http/get-as-stream gpx)]
-                    (with-open [os (fs/output-stream gpx-path)]
-                      (io/copy-input-to-output-stream is os))
-                    (println "\tdownload failed ..."))
-                  (println "\tallready downloaded ..."))))
-            
-            ;; old version, before 20201222
-            #_(let [pattern (java.util.regex.Pattern/compile "var terrainsObj = (\\{.+?(?=\\};)\\})")
-                    matcher (.matcher
-                             pattern
-                             (io/input-stream->string (http/get-as-stream link)))]
-                (.find matcher)
-                (let [entry (update-in
-                             (json/read-keyworded (.group matcher 1))
-                             [:post :postmeta]
-                             #(view/seq->map :label %))]
-                  (with-open [os (fs/output-stream info-path)]
-                    (json/write-to-stream entry os))
-                  (let [gpx-link (get-in entry [:post :postmeta "GPX" :value])]
-                    (when (not (empty? gpx-link))
-                      (println "\tdownloading gpx ...")
-                      (with-open [os (fs/output-stream gpx-path)]
-                        (io/copy-input-to-output-stream
-                         (http/get-as-stream gpx-link)
-                         os))))))
-            (Thread/sleep 3000))
-          (println "\tpost already downloaded ..."))
-        (println "[ERROR] ref not extracted for:" link))))
-  (println "info and gpx download finished"))
+  ;; download route info and gpx if exists, supports restart
+  (context/trace context "incrementa downloading route info and gpx if exists")
+  (let [posts (concat
+               (with-open [is (fs/input-stream (path/child dataset-path "posts.json"))]
+                 (json/read-keyworded is))
+               (with-open [is (fs/input-stream (path/child dataset-path "posts-transversal.json"))]
+                 (json/read-keyworded is))
+               (with-open [is (fs/input-stream (path/child dataset-path "posts-e-paths.json"))]
+                 (json/read-keyworded is)))]
+    (doseq [post posts]
+      (let [post (update-in post [:postmeta] #(view/seq->map :label %))
+            postid (:ID post)
+            title (:title post)
+            link (:permalink post)
+            oznaka (get-in post [:postmeta "Oznaka" :value])
+            info-path (path/child dataset-path "routes" (str oznaka ".json"))
+            content-path (path/child dataset-path "routes" (str oznaka ".html"))
+            gpx-path (path/child dataset-path "routes" (str oznaka ".gpx"))]
+        (context/trace context (str "processing " oznaka "-" title))
+        #_(println "\t" postid)
+        #_(println "\t" link)
+        ;; depending on use case either try all without gpx or info file
+        ;; in case of gpx most htmls will change because of news
+        (if (not (empty? oznaka))
+          (if (not
+               (fs/exists? gpx-path)
+               ;; (fs/exists? info-path)
+               )
+            (do
+              (context/trace context "\tdownloading post ...")
+              (let [content (io/input-stream->string (http/get-as-stream link))
+                    gpx (if-let [gpx (second
+                                      (re-find
+                                       #"<tr><th>GPX</th><td><a href=\"(.+?)\""
+                                       content))]
+                          (.trim gpx))
+                    region (when-let [region (second
+                                              (re-find
+                                               #"<tr><th>Region</th><td>(.+?)</td>"
+                                               content))]
+                             (.trim region))
+                    uredjenost (when-let [uredjenost (second
+                                                      (re-find
+                                                       #"<tr><th>Uređenost</th><td>(.+?)</td>"
+                                                       content))]
+                                 (.trim uredjenost))
+                    planina (or
+                             (when-let [planina (second
+                                                 (re-find
+                                                  #"<tr><th>Planina/predeo</th><td>(.+?)</td>"
+                                                  content))]
+                               (.trim planina))
+                             (when-let [planine (second
+                                                 (re-find
+                                                  #"<tr><th>Planine/predeli</th><td>(.+?)</td>"
+                                                  content))]
+                               (.trim planine)))
+                    info {
+                          :id oznaka
+                          :gpx gpx
+                          :region region
+                          :title title
+                          :uredjenost uredjenost
+                          :planina planina
+                          :link link}]
+                (with-open [os (fs/output-stream info-path)]
+                  (json/write-pretty-print info (io/output-stream->writer os)))
+                (with-open [os (fs/output-stream content-path)]
+                  (io/write-string os content))
+                (when (not (empty? gpx))
+                  (if (not (fs/exists? gpx-path))
+                    (do
+                      (context/trace context "\tdownloading gpx ...")
+                      (if-let [is (http/get-as-stream gpx)]
+                        (with-open [os (fs/output-stream gpx-path)]
+                          (io/copy-input-to-output-stream is os))
+                        (context/trace context "\tdownload failed ...")))
+                    (context/trace context "\tallready downloaded ..."))))
+              
+              ;; old version, before 20201222
+              #_(let [pattern (java.util.regex.Pattern/compile "var terrainsObj = (\\{.+?(?=\\};)\\})")
+                      matcher (.matcher
+                               pattern
+                               (io/input-stream->string (http/get-as-stream link)))]
+                  (.find matcher)
+                  (let [entry (update-in
+                               (json/read-keyworded (.group matcher 1))
+                               [:post :postmeta]
+                               #(view/seq->map :label %))]
+                    (with-open [os (fs/output-stream info-path)]
+                      (json/write-to-stream entry os))
+                    (let [gpx-link (get-in entry [:post :postmeta "GPX" :value])]
+                      (when (not (empty? gpx-link))
+                        (println "\tdownloading gpx ...")
+                        (with-open [os (fs/output-stream gpx-path)]
+                          (io/copy-input-to-output-stream
+                           (http/get-as-stream gpx-link)
+                           os))))))
+              (Thread/sleep 3000))
+            (context/trace context "\tpost already downloaded ..."))
+          (context/trace context (str "[ERROR] ref not extracted for:" link)))))
+    (context/trace context "info and gpx download finished")))
 
 ;; todo various stats, integrate into prepare
 #_(first posts)
@@ -594,6 +640,11 @@
                      (get-in post [:postmeta "Društvo" :value 0 :post_title])))))
                {}
                posts)]
+
+    ;; 20250330
+    ;; Number of posts: 413
+    ;; From: 413 has gpx: 293 and: 120 doesn't have
+    
     #_(count posts)
     ;; 323 on 20221026
     ;; 322 on 20220731
@@ -671,6 +722,38 @@
       (core/context-report job-context "routes prepared")
       (core/context-report job-context (str "Number of routes: " (count routes)))
 
+      ;; 20250330
+      ;; write geojson files per each route
+      (doseq [route (vals routes)]
+        (println "processing" (:id route))
+        (when (:gpx-path route)
+          (let [gpx-path (:gpx-path route)
+                geojson-path (path/child
+                              (path/parent gpx-path)
+                              (.replace (path/name gpx-path) ".gpx" ".geojson"))
+                track (when gpx-path
+                        (with-open [is (fs/input-stream gpx-path)] (gpx/read-track-gpx is)))
+                location-seq (when track
+                               (apply concat (:track-seq track)))
+                wpt-seq (:wpt-seq track)]
+            (println "processing " geojson-path)
+            (with-open [os (fs/output-stream geojson-path)]
+              (json/write-to-stream
+               (geojson/geojson
+                (concat
+                 [(geojson/line-string location-seq)]
+                 (map
+                  geojson/location->point
+                  wpt-seq)
+                 (map-indexed
+                  (fn [index location]
+                    (update-in
+                     (geojson/location->point location)
+                     [:properties :name]
+                     (constantly (str index))))
+                  (take-nth 100 location-seq))))
+               os)))))
+      
       ;; todo store on disk to decouple jobs
       (with-open [os (fs/output-stream (path/child osm-pss-integration-path "pss-dataset.edn"))]
         (edn/write-pprint-object os routes)))))
@@ -690,9 +773,6 @@
         resource-controller (pipeline/create-trace-resource-controller context)
         serbia-extract-path (:geofabrik-serbia-split-path configuration)
         osm-pss-integration-path (:osm-pss-integration-path configuration)
-        state-done-node (get
-                         (core/context-configuration job-context)
-                         :state-done-node)
         timestamp (System/currentTimeMillis)
         relation-seq (atom '())]
     (pipeline/read-edn-go
@@ -733,10 +813,7 @@
       (doseq [relation (sort-by
                         #(get-in % [:tags "ref"])
                         (deref relation-seq))]
-        (io/write-line os (str (get-in relation [:tags "ref"]) "\t" (:id relation)))))
-
-    (core/state-set state-done-node timestamp)
-    (core/context-report job-context (str "state set at " state-done-node))))
+        (io/write-line os (str (get-in relation [:tags "ref"]) "\t" (:id relation)))))))
 
 #_(core/job-sumbit
    (core/job-create
@@ -756,9 +833,6 @@
         osm-pss-integration-path (:osm-pss-integration-path configuration)
         serbia-extract-path (:geofabrik-serbia-split-path configuration)
         osm-pss-extract-path (:osm-pss-extract-path configuration)
-        state-done-node (get
-                         (core/context-configuration job-context)
-                         :state-done-node)
         timestamp (System/currentTimeMillis)]
     (core/context-report job-context "loading relations to extract")
     (let [relation-set (with-open [is (fs/input-stream
@@ -826,10 +900,7 @@
       
       (alter-var-root #'active-pipeline (constantly (channel-provider)))
 
-      (core/wait-pipeline-job context)
-
-      (core/state-set state-done-node timestamp)
-      (core/context-report job-context (str "state set at " state-done-node)))))
+      (core/wait-pipeline-job context))))
 
 #_(core/job-sumbit
    (core/job-create
@@ -942,9 +1013,6 @@
 (defn extract-pss-stats [job-context]
   (let [configuration (core/context-configuration job-context)
         integration-git-path (:osm-pss-integration-path configuration)
-        state-done-node (get
-                         (core/context-configuration job-context)
-                         :state-done-node)
         timestamp (System/currentTimeMillis)]
     (core/context-report job-context "loading osm-pss-extract")
     ;; overpass for relations
@@ -1176,6 +1244,8 @@
                                                mapped-routes)]
                (hiccup/html
                 [:html
+                 [:head
+                  [:meta {:charset "UTF-8"}]]
                  [:body {:style "font-family:arial;"}
                   [:br]
                   [:div (str "rute koje poseduju gpx a nisu mapirane (" (count routes-with-gpx) ")")]
@@ -1217,10 +1287,7 @@
                      #(id-compare %1 %2)
                      rest-of-routes))]]]))))))
 
-      (core/context-report job-context "Job finished")
-
-      (core/state-set state-done-node timestamp)
-      (core/context-report job-context (str "state set at " state-done-node)))))
+      (core/context-report job-context "Job finished"))))
 
 #_(core/job-sumbit
    (core/job-create
@@ -1240,9 +1307,6 @@
         resource-controller (pipeline/create-trace-resource-controller context)
         osm-pss-integration-path (:osm-pss-integration-path configuration)
         osm-pss-extract-path (:osm-pss-extract-path configuration)
-        state-done-node (get
-                         (core/context-configuration job-context)
-                         :state-done-node)
         timestamp (System/currentTimeMillis)]
     (pipeline/read-edn-go
      (context/wrap-scope context "read-node")
@@ -1358,10 +1422,7 @@
 
     (alter-var-root #'active-pipeline (constantly (channel-provider)))
     
-    (core/wait-pipeline-job context)
-    
-    (core/state-set state-done-node timestamp)
-    (core/context-report job-context (str "state set at " state-done-node))))
+    (core/wait-pipeline-job context)))
 
 #_(core/job-sumbit
  (core/job-create
@@ -1382,9 +1443,6 @@
         resource-controller (pipeline/create-trace-resource-controller context)
         osm-pss-integration-path (:osm-pss-integration-path configuration)
         osm-pss-extract-path (:osm-pss-extract-path configuration)
-        state-done-node (get
-                         (core/context-configuration job-context)
-                         :state-done-node)
         timestamp (System/currentTimeMillis)
         pss-dataset (atom {})]
     (pipeline/read-edn-go
@@ -1504,9 +1562,6 @@
         resource-controller (pipeline/create-trace-resource-controller context)
         osm-pss-integration-path (:osm-pss-integration-path configuration)
         osm-pss-extract-path (:osm-pss-extract-path configuration)
-        state-done-node (get
-                         (core/context-configuration job-context)
-                         :state-done-node)
         timestamp (System/currentTimeMillis)]
     (let [dataset (load-pss-extract-as-dataset job-context)]
       (core/context-report
@@ -1546,10 +1601,7 @@
                      :else
                      nil))
                  (:members relation))))}
-             (io/output-stream->writer os))))))
-    
-    (core/state-set state-done-node timestamp)
-    (core/context-report job-context (str "state set at " state-done-node))))
+             (io/output-stream->writer os))))))))
 
 (defn extract-geojson-with-trails
   "Creates GeoJSON containing each trail as single feature for each trail, containing all trail geometry. If trail is
@@ -1561,9 +1613,6 @@
         resource-controller (pipeline/create-trace-resource-controller context)
         osm-pss-integration-path (:osm-pss-integration-path configuration)
         osm-pss-extract-path (:osm-pss-extract-path configuration)
-        state-done-node (get
-                         (core/context-configuration job-context)
-                         :state-done-node)
         timestamp (System/currentTimeMillis)]
     (let [dataset (load-pss-extract-as-dataset job-context)]
       (core/context-report
@@ -1611,10 +1660,7 @@
                          nil))
                      (:members relation)))))))
             (vals (:relations dataset)))))
-         (io/output-stream->writer os))))
-    
-    (core/state-set state-done-node timestamp)
-    (core/context-report job-context (str "state set at " state-done-node))))
+         (io/output-stream->writer os))))))
 
 (defn create-trails-image
   "Draws trails on top of image generated from tiles"
@@ -1632,9 +1678,6 @@
         max-x (+ (* max-tile-x 256) 256)
         min-y (* min-tile-y 256)
         max-y (+ (* max-tile-y 256) 256)
-        state-done-node (get
-                         (core/context-configuration job-context)
-                         :state-done-node)
         timestamp (System/currentTimeMillis)]
 
     (core/context-report job-context "write trails on top of background")
@@ -1678,10 +1721,280 @@
 
       (core/context-report job-context "write generated image")
       (with-open [os (fs/output-stream image-path)]
-        (draw/write-png-to-stream image os)))
-    
-    (core/state-set state-done-node timestamp)
-    (core/context-report job-context (str "state set at " state-done-node))))
+        (draw/write-png-to-stream image os)))))
+
+;; 20250301 prototype diff procedure
+;; 20250330 something is wrong with this piece of code, commenting
+;; todo
+#_(let [original (with-open [is (fs/input-stream
+                                 (path/string->path
+                                  "/Users/vanja/projects/pss-map-v1/dataset/trails.geojson"))]
+                   (:features (json/read-keyworded is)))
+        original-ids (into
+                      #{}
+                      (map
+                       (fn [feature]
+                         (get-in feature [:properties :ref]))
+                       original))
+        new (with-open [is (fs/input-stream
+                            (path/string->path
+                             "/Users/vanja/projects/osm-pss-integration/dataset/trails.geojson"))]
+              (:features (json/read-keyworded is)))
+        new-ids (into
+                 #{}
+                 (map
+                  (fn [feature]
+                    (get-in feature [:properties :ref]))
+                  new))]
+    (println "count in original:" (count original))
+    (println "count in new:" (count new))
+    (println "new routes")
+    (doseq [feature (filter
+                     (fn [feature]
+                       (not (contains?
+                             original-ids
+                             (get-in feature [:properties :ref]))))
+                     new)]
+      (println "\t"
+               (get-in feature [:properties :ref])
+               (get-in feature [:properties :name])))
+    (println "deleted routes")
+    (doseq [feature (filter
+                     (fn [feature]
+                       (not (contains?
+                             new-ids
+                             (get-in feature [:properties :ref]))))
+                     original)]
+      (println "\t"
+               (get-in feature [:properties :ref])
+               (get-in feature [:properties :name]))))
+
+
+;; e7 report from various gpx
+(defn create-e7-map [context]
+  (let [configuration (context/configuration context)
+        dataset-git-root-path (get configuration :dataset-git-root-path)
+        export-path (get configuration :export-path)]
+   (context/trace context (str "creating map for: e7" ))
+   (with-open [os (fs/output-stream export-path)]
+     (io/write-string
+      os
+      (map/render-raw
+       {}
+       [
+        (map/tile-layer-osm true)
+        (map/tile-layer-bing-satellite false)
+        (map/tile-layer-google-satellite false)
+        (with-open [is (fs/input-stream (path/child dataset-git-root-path
+                                                    "era" "E7 Serbia final.gpx"))]
+           (map/tile-overlay-gpx "ERA E7" is true true))
+        
+        (binding [geojson/*style-stroke-color* geojson/color-red]
+          (with-open [is (fs/input-stream (path/child dataset-git-root-path
+                                                      "pss.rs" "routes" "E7-1.gpx"))]
+            (map/tile-overlay-gpx "pss.rs E7-1" is true false)))
+        (binding [geojson/*style-stroke-color* geojson/color-red]
+          (with-open [is (fs/input-stream (path/child dataset-git-root-path
+                                                      "pss.rs" "routes" "E7-2.gpx"))]
+            (map/tile-overlay-gpx "pss.rs E7-2" is true false)))
+        (binding [geojson/*style-stroke-color* geojson/color-red]
+          (with-open [is (fs/input-stream (path/child dataset-git-root-path
+                                                      "pss.rs" "routes" "E7-3.gpx"))]
+            (map/tile-overlay-gpx "pss.rs E7-3" is true false)))
+        (binding [geojson/*style-stroke-color* geojson/color-red]
+          (with-open [is (fs/input-stream (path/child dataset-git-root-path
+                                                      "pss.rs" "routes" "E7-4.gpx"))]
+            (map/tile-overlay-gpx "pss.rs E7-4" is true false)))
+        (binding [geojson/*style-stroke-color* geojson/color-red]
+          (with-open [is (fs/input-stream (path/child dataset-git-root-path
+                                                      "pss.rs" "routes" "E7-5.gpx"))]
+            (map/tile-overlay-gpx "pss.rs E7-5" is true false)))
+        (binding [geojson/*style-stroke-color* geojson/color-red]
+          (with-open [is (fs/input-stream (path/child dataset-git-root-path
+                                                      "pss.rs" "routes" "E7-6.gpx"))]
+            (map/tile-overlay-gpx "pss.rs E7-6" is true false)))
+        (binding [geojson/*style-stroke-color* geojson/color-red]
+          (with-open [is (fs/input-stream (path/child dataset-git-root-path
+                                                      "pss.rs" "routes" "E7-7.gpx"))]
+            (map/tile-overlay-gpx "pss.rs E7-7" is true false)))
+        (binding [geojson/*style-stroke-color* geojson/color-red]
+          (with-open [is (fs/input-stream (path/child dataset-git-root-path
+                                                      "pss.rs" "routes" "E7-8.gpx"))]
+            (map/tile-overlay-gpx "pss.rs E7-8" is true false)))
+        (binding [geojson/*style-stroke-color* geojson/color-red]
+          (with-open [is (fs/input-stream (path/child dataset-git-root-path
+                                                      "pss.rs" "routes" "E7-9.gpx"))]
+            (map/tile-overlay-gpx "pss.rs E7-9" is true false)))
+        (binding [geojson/*style-stroke-color* geojson/color-red]
+          (with-open [is (fs/input-stream (path/child dataset-git-root-path
+                                                      "pss.rs" "routes" "E7-10.gpx"))]
+            (map/tile-overlay-gpx "pss.rs E7-10" is true false)))
+        (binding [geojson/*style-stroke-color* geojson/color-red]
+          (with-open [is (fs/input-stream (path/child dataset-git-root-path
+                                                      "pss.rs" "routes" "E7-11.gpx"))]
+            (map/tile-overlay-gpx "pss.rs E7-11" is true false)))
+        (binding [geojson/*style-stroke-color* geojson/color-red]
+          (with-open [is (fs/input-stream (path/child dataset-git-root-path
+                                                      "pss.rs" "routes" "E7-12.gpx"))]
+            (map/tile-overlay-gpx "pss.rs E7-12" is true false)))
+        (binding [geojson/*style-stroke-color* geojson/color-red]
+          (with-open [is (fs/input-stream (path/child dataset-git-root-path
+                                                      "pss.rs" "routes" "E7-13.gpx"))]
+            (map/tile-overlay-gpx "pss.rs E7-13" is true false)))
+        (binding [geojson/*style-stroke-color* geojson/color-red]
+          (with-open [is (fs/input-stream (path/child dataset-git-root-path
+                                                      "pss.rs" "routes" "E7-14.gpx"))]
+            (map/tile-overlay-gpx "pss.rs E7-14" is true false)))
+        (binding [geojson/*style-stroke-color* geojson/color-red]
+          (with-open [is (fs/input-stream (path/child dataset-git-root-path
+                                                      "pss.rs" "routes" "E7-15.gpx"))]
+            (map/tile-overlay-gpx "pss.rs E7-15" is true false)))
+        (binding [geojson/*style-stroke-color* geojson/color-red]
+          (with-open [is (fs/input-stream (path/child dataset-git-root-path
+                                                      "pss.rs" "routes" "E7-16.gpx"))]
+            (map/tile-overlay-gpx "pss.rs E7-16" is true false)))
+        (binding [geojson/*style-stroke-color* geojson/color-red]
+          (with-open [is (fs/input-stream (path/child dataset-git-root-path
+                                                      "pss.rs" "routes" "E7-17.gpx"))]
+            (map/tile-overlay-gpx "pss.rs E7-17" is true false)))
+        (binding [geojson/*style-stroke-color* geojson/color-red]
+          (with-open [is (fs/input-stream (path/child dataset-git-root-path
+                                                      "pss.rs" "routes" "E7-18.gpx"))]
+            (map/tile-overlay-gpx "pss.rs E7-18" is true false)))
+        (binding [geojson/*style-stroke-color* geojson/color-red]
+          (with-open [is (fs/input-stream (path/child dataset-git-root-path
+                                                      "pss.rs" "routes" "E7-19.gpx"))]
+            (map/tile-overlay-gpx "pss.rs E7-19" is true false)))
+        (binding [geojson/*style-stroke-color* geojson/color-red]
+          (with-open [is (fs/input-stream (path/child dataset-git-root-path
+                                                      "pss.rs" "routes" "E7-20.gpx"))]
+            (map/tile-overlay-gpx "pss.rs E7-20" is true false)))
+
+        ;; problematic E10-11
+        (binding [geojson/*style-stroke-color* geojson/color-red]
+          (with-open [is (fs/input-stream (path/child dataset-git-root-path
+                                                      "pss.rs" "routes" "E7-10-11.gpx"))]
+            (map/tile-overlay-gpx "pss.rs E7-10-11" is true false)))
+
+        
+        ;; new divided routes
+        
+        (binding [geojson/*style-stroke-color* geojson/color-green]
+          (with-open [is (fs/input-stream (path/child dataset-git-root-path
+                                                      "pss.rs" "routes" "E7-10-4.gpx"))]
+            (map/tile-overlay-gpx "pss.rs E7-10-4" is true false)))
+        (binding [geojson/*style-stroke-color* geojson/color-green]
+          (with-open [is (fs/input-stream (path/child dataset-git-root-path
+                                                      "pss.rs" "routes" "E7-10-5.gpx"))]
+            (map/tile-overlay-gpx "pss.rs E7-10-5" is true false)))
+        (binding [geojson/*style-stroke-color* geojson/color-green]
+          (with-open [is (fs/input-stream (path/child dataset-git-root-path
+                                                      "pss.rs" "routes" "E7-10-6.gpx"))]
+            (map/tile-overlay-gpx "pss.rs E7-10-6" is true false)))
+
+        (binding [geojson/*style-stroke-color* geojson/color-green]
+          (with-open [is (fs/input-stream (path/child dataset-git-root-path
+                                                      "pss.rs" "routes" "E7-11-1.gpx"))]
+            (map/tile-overlay-gpx "pss.rs E7-11-1" is true false)))
+        (binding [geojson/*style-stroke-color* geojson/color-green]
+          (with-open [is (fs/input-stream (path/child dataset-git-root-path
+                                                      "pss.rs" "routes" "E7-11-2.gpx"))]
+            (map/tile-overlay-gpx "pss.rs E7-11-2" is true false)))
+        (binding [geojson/*style-stroke-color* geojson/color-green]
+          (with-open [is (fs/input-stream (path/child dataset-git-root-path
+                                                      "pss.rs" "routes" "E7-11-3.gpx"))]
+            (map/tile-overlay-gpx "pss.rs E7-11-3" is true false)))
+        (binding [geojson/*style-stroke-color* geojson/color-green]
+          (with-open [is (fs/input-stream (path/child dataset-git-root-path
+                                                      "pss.rs" "routes" "E7-11-4.gpx"))]
+            (map/tile-overlay-gpx "pss.rs E7-11-4" is true false)))
+        (binding [geojson/*style-stroke-color* geojson/color-green]
+          (with-open [is (fs/input-stream (path/child dataset-git-root-path
+                                                      "pss.rs" "routes" "E7-11-5.gpx"))]
+            (map/tile-overlay-gpx "pss.rs E7-11-5" is true false)))
+
+        (binding [geojson/*style-stroke-color* geojson/color-green]
+          (with-open [is (fs/input-stream (path/child dataset-git-root-path
+                                                      "pss.rs" "routes" "E7-12-1.gpx"))]
+            (map/tile-overlay-gpx "pss.rs E7-12-1" is true false)))
+        (binding [geojson/*style-stroke-color* geojson/color-green]
+          (with-open [is (fs/input-stream (path/child dataset-git-root-path
+                                                      "pss.rs" "routes" "E7-12-2.gpx"))]
+            (map/tile-overlay-gpx "pss.rs E7-12-2" is true false)))
+        (binding [geojson/*style-stroke-color* geojson/color-green]
+          (with-open [is (fs/input-stream (path/child dataset-git-root-path
+                                                      "pss.rs" "routes" "E7-12-3.gpx"))]
+            (map/tile-overlay-gpx "pss.rs E7-12-3" is true false)))
+        (binding [geojson/*style-stroke-color* geojson/color-green]
+          (with-open [is (fs/input-stream (path/child dataset-git-root-path
+                                                      "pss.rs" "routes" "E7-12-4.gpx"))]
+            (map/tile-overlay-gpx "pss.rs E7-12-4" is true false)))
+        (binding [geojson/*style-stroke-color* geojson/color-green]
+          (with-open [is (fs/input-stream (path/child dataset-git-root-path
+                                                      "pss.rs" "routes" "E7-12-5.gpx"))]
+            (map/tile-overlay-gpx "pss.rs E7-12-5" is true false)))
+        (binding [geojson/*style-stroke-color* geojson/color-green]
+          (with-open [is (fs/input-stream (path/child dataset-git-root-path
+                                                      "pss.rs" "routes" "E7-12-6.gpx"))]
+            (map/tile-overlay-gpx "pss.rs E7-12-6" is true false)))
+
+
+        ;; osm relations
+        (binding [geojson/*style-stroke-color* geojson/color-purple]
+          (map/tile-overlay-osm-hiking-relation "E7-8 14177412" 14177412 true false false))
+        (binding [geojson/*style-stroke-color* geojson/color-purple]
+          (map/tile-overlay-osm-hiking-relation "E7-9 14180878" 14180878 true false false))
+        (binding [geojson/*style-stroke-color* geojson/color-purple]
+          (map/tile-overlay-osm-hiking-relation "E7-12 11753312" 11753312 true false false))
+        (binding [geojson/*style-stroke-color* geojson/color-purple]
+          (map/tile-overlay-osm-hiking-relation "E7-16 14185390" 14185390 true false false))
+
+        ;; osm relations added by Stadtigel
+        (binding [geojson/*style-stroke-color* geojson/color-purple]
+          (map/tile-overlay-osm-hiking-relation "E7-1 18335543" 18335543 true false false))
+        (binding [geojson/*style-stroke-color* geojson/color-purple]
+          (map/tile-overlay-osm-hiking-relation "E7-2 18335542" 18335542 true false false))
+        (binding [geojson/*style-stroke-color* geojson/color-purple]
+          (map/tile-overlay-osm-hiking-relation "E7-3 18331386" 18331386 true false false))
+        (binding [geojson/*style-stroke-color* geojson/color-purple]
+          (map/tile-overlay-osm-hiking-relation "E7-4 18206217" 18206217 true false false))
+        (binding [geojson/*style-stroke-color* geojson/color-purple]
+          (map/tile-overlay-osm-hiking-relation "E7-5 12499130" 12499130 true false false))
+        (binding [geojson/*style-stroke-color* geojson/color-purple]
+          (map/tile-overlay-osm-hiking-relation "E7-6 18335544" 18335544 true false false))
+        (binding [geojson/*style-stroke-color* geojson/color-purple]
+          (map/tile-overlay-osm-hiking-relation "E7-7 18345452" 18345452 true false false))
+        
+        (binding [geojson/*style-stroke-color* geojson/color-purple]
+          (map/tile-overlay-osm-hiking-relation "E7-10 17610623" 17610623 true false false))
+        (binding [geojson/*style-stroke-color* geojson/color-purple]
+          (map/tile-overlay-osm-hiking-relation "E7-11 18360637" 18360637 true false false))
+        (binding [geojson/*style-stroke-color* geojson/color-purple]
+          (map/tile-overlay-osm-hiking-relation "E7-12 18360638" 18360638 true false false))
+        (binding [geojson/*style-stroke-color* geojson/color-purple]
+          (map/tile-overlay-osm-hiking-relation "E7-13 18368092" 18368092 true false false))
+        (binding [geojson/*style-stroke-color* geojson/color-purple]
+          (map/tile-overlay-osm-hiking-relation "E7-14 18371638" 18371638 true false false))
+        (binding [geojson/*style-stroke-color* geojson/color-purple]
+          (map/tile-overlay-osm-hiking-relation "E7-15 18374951" 18374951 true false false))
+        
+        (binding [geojson/*style-stroke-color* geojson/color-purple]
+          (map/tile-overlay-osm-hiking-relation "E7-17 18404717" 18404717 true false false))
+        (binding [geojson/*style-stroke-color* geojson/color-purple]
+          (map/tile-overlay-osm-hiking-relation "E7-18 18397689" 18397689 true false false))
+        (binding [geojson/*style-stroke-color* geojson/color-purple]
+          (map/tile-overlay-osm-hiking-relation "E7-19 18378518" 18378518 true false false))
+        (binding [geojson/*style-stroke-color* geojson/color-purple]
+          (map/tile-overlay-osm-hiking-relation "E7-20 18391888" 18391888 true false false))
+        
+        
+        ])))
+   (context/trace
+    context
+    (str
+     "map created, view <a href='file://"
+     (path/path->string export-path)
+     "'>map</a>"))))
 
 
 

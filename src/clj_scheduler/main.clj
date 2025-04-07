@@ -114,8 +114,7 @@
                         [:td {:style "border: 1px solid black; padding: 5px;"}
                          (type (:trigger-fn trigger))]
                         [:td {:style "border: 1px solid black; padding: 5px;"}
-                         [:a {:href (str "/trigger/" (url-encode name) "/manual")
-                              :target "_blank"}
+                         [:a {:href (str "/trigger/" (url-encode name) "/manual")}
                           "manual trigger"]]])
                      (sort-by first (deref core/triggers)))]
                    [:br]
@@ -222,6 +221,9 @@
          (core/state-unset node)
          (ring.util.response/redirect "/")))))))
 
+
+;; to restart http after changes
+#_(start-server)
 
 #_(deref core/jobs)
 #_(swap! core/jobs (constantly (list)))

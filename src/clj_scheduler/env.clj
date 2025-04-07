@@ -27,3 +27,6 @@
   (path/string->path
    (or (jvm/environment-variable "DATASET_GIT") "/Users/vanja/dataset-git")))
 
+(def projects-path
+  (path/string->path
+   (or (jvm/environment-variable "PROJECTS_GIT") "/Users/vanja/projects")))

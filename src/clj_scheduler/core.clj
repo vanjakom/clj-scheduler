@@ -254,7 +254,7 @@
 
 #_(jobs-cleanup 20)
 
-;; todo single workweassumed, not thread safe
+;; todo single worker assumed, not thread safe
 (def worker-thread-main
   (new
    Thread
@@ -276,6 +276,13 @@
                 (context/trace context "starting job")
                 ((:fn job) context)
                 (swap! (:state job) assoc :status :finished)
+                ;; 20250327 state done node should be populated from worker
+                ;; no need to replicate same code in each job
+                (when-let [state-done-node (get
+                                            (context/configuration context)
+                                            :state-done-node)]
+                  (context/store-set context  state-done-node (System/currentTimeMillis))
+                  (context/trace context (str "state set at " state-done-node)))
                 (catch Exception e
                   ;; todo capture exception to log
                   (println "exception in job" (:id job))
@@ -302,6 +309,11 @@
 
 (defn trigger-unregister [name]
   (swap! triggers dissoc name))
+
+(defn triggers-clear []
+  (swap! triggers (constantly {})))
+
+(triggers-clear)
 
 (def trigger-thread
   (new
@@ -350,11 +362,11 @@
                            :id (str name "-" (time/timestamp))
                            :name name
                            :configuration (:configuration trigger)})]
-            (try
-              ((:trigger-fn trigger) context)
-              (catch Exception e
-                (.printStackTrace e)
-                (println (str "[trigger] failed " name)))))))
+             (try
+               ((:trigger-fn trigger) context)
+               (catch Exception e
+                 (.printStackTrace e)
+                 (println (str "[trigger] failed " name)))))))
        (state-set ["system" "trigger" "last"] (System/currentTimeMillis))
        (java.lang.Thread/sleep 5000)))))
 
