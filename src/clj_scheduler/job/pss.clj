@@ -163,7 +163,13 @@
         (str
          "type = route<br>"
          "route = hiking<br>"
-         "network = rwn<br>"
+         (cond
+           (.startsWith id "E")
+           "network = iwn<br>"
+           (.startsWith id "T")
+           "network = nwn<br>"
+           :else
+           "network = rwn<br>")
          "source = pss_staze<br>"
          "operator = " (:drustvo route) "<br>"
          "ref = " id "<br>"
@@ -1287,6 +1293,13 @@
                      #(id-compare %1 %2)
                      rest-of-routes))]]]))))))
 
+      (core/context-report
+       job-context
+       (str
+        "View report <a href='file://"
+        (path/path->string (path/child integration-git-path "osm-state.html"))
+        "'>here</a>"))
+      
       (core/context-report job-context "Job finished"))))
 
 #_(core/job-sumbit

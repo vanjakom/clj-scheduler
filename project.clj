@@ -5,5 +5,5 @@
             :url "https://www.eclipse.org/legal/epl-2.0/"}
   :dependencies [
                  [org.clojure/clojure "1.10.1"]
-                 [com.mungolab/clj-common "0.3.0-SNAPSHOT"]
-                 [com.mungolab/clj-geo "0.2.0-SNAPSHOT"]])
+                 [com.mungolab/clj-common "0.3.2"]
+                 [com.mungolab/clj-geo "0.2.0"]])
