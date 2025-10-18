@@ -313,7 +313,9 @@
 (defn triggers-clear []
   (swap! triggers (constantly {})))
 
-(triggers-clear)
+;; use to remove all triggers
+
+#_(triggers-clear)
 
 (def trigger-thread
   (new

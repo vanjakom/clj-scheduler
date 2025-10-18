@@ -40,7 +40,9 @@
             (fs/move waypoint (path/child waypoints-root-path (path/name waypoint)))))
         (doseq [archive (fs/list device-archive-root-path)]
           (context/trace context (str "processing archive: " (path/name archive)))
-          (fs/move archive (path/child archive-root-path (path/name archive))))
+          (if (.endsWith (path/name archive) ".gpx")
+            (fs/move archive (path/child archive-root-path (path/name archive)))
+            (context/trace context "skipping other file: " (path/path->string archive))))
         (when (fs/exists? device-geocache-path)
           (let [date (.format
                       (new java.text.SimpleDateFormat "yyyyMMdd")
@@ -66,7 +68,8 @@
             ;; maybe better to use move but it would require geocache file update
             (fs/copy
              device-geocache-xml-path
-             (path/child geocache-root-path name)))))
+             (path/child geocache-root-path name))))
+        (context/trace context "Finished"))
       (context/trace context "Volume not present, exiting") )))
 
 #_(retrieve-from-device
