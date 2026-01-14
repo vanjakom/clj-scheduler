@@ -137,11 +137,30 @@
     (doseq [repo (fs/list repo-root)]
       (when (fs/is-directory repo)
         #_(core/context-report context (str "checking: " (last repo)))
-        (let [status (git/status repo)]
+        (let [status (git/status context repo)]
           (core/context-report context (str "[" (name (:status status)) "] " (last repo)))
           (core/state-set
            (concat state-root [(last repo) "status"])
            (:status status)))))
+    (core/context-report context "finished")))
+
+(defn git-pull-repo-seq
+  "Updates all subdirs in given repo-root, assuming they are git repos.
+  Reports status of each in state"
+  [context]
+  (let [configuration (core/context-configuration context)
+        repo-seq (get configuration :repo-seq)
+        state-root (get configuration :state-root)]
+    (context/trace context (str "state root: " state-root))
+    (doseq [repo repo-seq]
+      (when (fs/is-directory repo)
+        #_(core/context-report context (str "checking: " (last repo)))
+        (let [response (git/pull context repo)
+              status (if (some? response) "ok" "fail")]
+          (context/trace context (str "[" status "] " (last repo)))
+          (core/state-set
+           (concat state-root [(last repo) "status"])
+           status))))
     (core/context-report context "finished")))
 
 #_(core/job-sumbit
