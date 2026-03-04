@@ -139,9 +139,10 @@
         #_(core/context-report context (str "checking: " (last repo)))
         (let [status (git/status context repo)]
           (core/context-report context (str "[" (name (:status status)) "] " (last repo)))
-          (core/state-set
-           (concat state-root [(last repo) "status"])
-           (:status status)))))
+          (when (some? state-root)
+            (core/state-set
+             (concat state-root [(last repo) "status"])
+             (:status status))))))
     (core/context-report context "finished")))
 
 (defn git-pull-repo-seq
@@ -158,9 +159,10 @@
         (let [response (git/pull context repo)
               status (if (some? response) "ok" "fail")]
           (context/trace context (str "[" status "] " (last repo)))
-          (core/state-set
-           (concat state-root [(last repo) "status"])
-           status))))
+          (when (some? state-root)
+           (core/state-set
+            (concat state-root [(last repo) "pull"])
+            status)))))
     (core/context-report context "finished")))
 
 #_(core/job-sumbit
